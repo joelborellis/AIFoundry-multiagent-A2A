@@ -583,7 +583,7 @@ def _get_initialized_routing_agent_sync() -> RoutingAgent:
         routing_agent_instance = await RoutingAgent.create(
             remote_agent_addresses=[
                 os.getenv('SPORTS_RESULTS_URL', 'http://localhost:10001'),
-                os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),   
+                #os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),   
             ]
         )
         # Create the Azure AI agent

@@ -30,13 +30,13 @@ class RoutingAgentApp:
     async def initialize_routing_agent(self):
         """Initialize the Azure AI routing agent."""
         try:
-            print("Initializing Azure AI routing agent...")
+            print("Initializing Azure AI routing agent looking for remote Agent cards...")
             
             # Create the routing agent with remote agent addresses
             self.routing_agent = await RoutingAgent.create(
                 remote_agent_addresses=[
                     os.getenv('SPORTS_RESULTS_URL', 'http://localhost:10001'),
-                    os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),
+                    #os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),
                 ]
             )
             
