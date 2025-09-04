@@ -1,0 +1,5 @@
+& C:/Projects/AIFoundry-multiagent-A2A/routing_agent/.venv/Scripts/Activate.ps1
+
+& C:/Projects/AIFoundry-multiagent-A2A/remote_agents/sports_news_agent/.venv/Scripts/Activate.ps1
+
+& C:/Projects/AIFoundry-multiagent-A2A/remote_agents/sports_results_agent/.venv/Scripts/Activate.ps1

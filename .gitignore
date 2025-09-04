@@ -1,3 +1,17 @@
+# project stuff
+routing_agent/__pycache__/
+routing_agent/.venv
+routing_agent/.env
+
+remote_agents/sports_news_agent/__pycache__
+remote_agents/sports_news_agent/.venv
+remote_agents/sports_news_agent/.env
+
+remote_agents/sports_results_agent/__pycache__
+remote_agents/sports_results_agent/.venv
+remote_agents/sports_results_agent/.env
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
