@@ -153,7 +153,7 @@ class RoutingAgent:
         try:
             # Create Azure AI Agent with better error handling
             model_name = os.environ.get("AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME", "gpt-4.1-mini")
-            print(f"Creating agent with model: {model_name}")
+            print(f"Creating AIFoundry routing agent with model: {model_name}")
             print(f"Instructions length: {len(instructions)} characters")
 
             tools = [{
@@ -574,33 +574,3 @@ Always be helpful and route requests to the most appropriate agent."""
     def __del__(self):
         """Destructor to ensure cleanup."""
         self.cleanup()
-
-
-def _get_initialized_routing_agent_sync() -> RoutingAgent:
-    """Synchronously creates and initializes the RoutingAgent."""
-
-    async def _async_main() -> RoutingAgent:
-        routing_agent_instance = await RoutingAgent.create(
-            remote_agent_addresses=[
-                os.getenv('SPORTS_RESULTS_URL', 'http://localhost:10001'),
-                #os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),   
-            ]
-        )
-        # Create the Azure AI agent
-        routing_agent_instance.create_agent()
-        return routing_agent_instance
-
-    try:
-        return asyncio.run(_async_main())
-    except RuntimeError as e:
-        if 'asyncio.run() cannot be called from a running event loop' in str(e):
-            print(
-                f'Warning: Could not initialize RoutingAgent with asyncio.run(): {e}. '
-                'This can happen if an event loop is already running (e.g., in Jupyter). '
-                'Consider initializing RoutingAgent within an async function in your application.'
-            )
-        raise
-
-
-# Note: Global initialization removed - applications should create their own instances
-# routing_agent = _get_initialized_routing_agent_sync()
