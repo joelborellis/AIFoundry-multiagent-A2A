@@ -60,7 +60,7 @@ def get_agent_card(host: str, port: int):
         description=(
             'This agent provides sports results for various sports leagues such as MLB, NBA, NASCAR, and Golf. '
         ),
-        url=f'http://localhost:10001/',
+        url='http://localhost:10001/',
         version='1.0.0',
         defaultInputModes=['text'],
         defaultOutputModes=['text'],

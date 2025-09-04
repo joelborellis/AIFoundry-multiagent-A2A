@@ -1,8 +1,6 @@
-import asyncio
 import json
 import os
 import time
-import traceback
 import uuid
 
 from typing import Any, Dict, List
@@ -26,7 +24,7 @@ from remote_agent_connection import (
 )
 from azure.ai.agents import AgentsClient
 from azure.identity import DefaultAzureCredential
-from azure.ai.agents.models import ListSortOrder, ToolSet
+from azure.ai.agents.models import ListSortOrder
 from dotenv import load_dotenv
 
 
