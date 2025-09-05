@@ -3,7 +3,7 @@ import os
 import time
 import uuid
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -16,7 +16,6 @@ from a2a.types import (
     SendMessageResponse,
     SendMessageSuccessResponse,
     Task,
-    TaskState,
 )
 from remote_agent_connection import (
     RemoteAgentConnections,
@@ -188,9 +187,9 @@ class RoutingAgent:
             )
             print(f"Created Azure AI agent, agent ID: {self.azure_agent.id}")
             
-            # Create a thread for conversation
-            self.current_thread = self.agents_client.threads.create()
-            print(f"Created thread, thread ID: {self.current_thread.id}")
+            # Don't create a thread here anymore - it will be created per conversation
+            # self.current_thread = self.agents_client.threads.create()
+            # print(f"Created thread, thread ID: {self.current_thread.id}")
             
             return self.azure_agent
             
@@ -199,6 +198,34 @@ class RoutingAgent:
             print(f"Model name used: {model_name}")
             print(f"Instructions: {instructions[:200]}...")
             raise
+
+    def get_or_create_thread(self, thread_id: Optional[str] = None):
+        """Get an existing thread or create a new one if thread_id is not provided."""
+        try:
+            if thread_id:
+                # Try to get the existing thread
+                try:
+                    thread = self.agents_client.threads.get(thread_id=thread_id)
+                    self.current_thread = thread
+                    print(f"Using existing thread, thread ID: {thread.id}")
+                    return thread
+                except Exception as e:
+                    print(f"Failed to get existing thread {thread_id}: {e}")
+                    # Fall through to create a new thread
+            
+            # Create a new thread
+            thread = self.agents_client.threads.create()
+            self.current_thread = thread
+            print(f"Created new thread, thread ID: {thread.id}")
+            return thread
+            
+        except Exception as e:
+            print(f"Error creating/getting thread: {e}")
+            raise
+
+    def get_current_thread_id(self) -> Optional[str]:
+        """Get the current thread ID."""
+        return self.current_thread.id if self.current_thread else None
 
     def get_root_instruction(self) -> str:
         """Generate the root instruction for the RoutingAgent."""
@@ -327,23 +354,23 @@ Always respond in html format."""
 
         return send_response.root.result
 
-    async def process_user_message(self, user_message: str) -> str:
+    async def process_user_message(self, user_message: str, thread_id: Optional[str] = None) -> str:
         """Process a user message through Azure AI Agent and return the response."""
         if not hasattr(self, 'azure_agent') or not self.azure_agent:
             return "Azure AI Agent not initialized. Please ensure the agent is properly created."
-        
-        if not hasattr(self, 'current_thread') or not self.current_thread:
-            return "Azure AI Thread not initialized. Please ensure the agent is properly created."
         
         try:
             # Initialize session if needed
             self.initialize_session()
             
+            # Get or create thread based on provided thread_id
+            thread = self.get_or_create_thread(thread_id)
+            
             print(f"Processing message: {user_message[:50]}...")
             
             # Create message in the thread
             message = self.agents_client.messages.create(
-                thread_id=self.current_thread.id, 
+                thread_id=thread.id, 
                 role="user", 
                 content=user_message
             )
@@ -352,7 +379,7 @@ Always respond in html format."""
             # Create and run the agent
             print(f"Creating run with agent ID: {self.azure_agent.id}")
             run = self.agents_client.runs.create(
-                thread_id=self.current_thread.id, 
+                thread_id=thread.id, 
                 agent_id=self.azure_agent.id
             )
             print(f"Created run, run ID: {run.id}")
@@ -368,7 +395,7 @@ Always respond in html format."""
                 time.sleep(1)
                 iteration += 1
                 run = self.agents_client.runs.get(
-                    thread_id=self.current_thread.id, 
+                    thread_id=thread.id, 
                     run_id=run.id
                 )
                 print(f"Run status: {run.status} (iteration {iteration})")
@@ -391,7 +418,7 @@ Always respond in html format."""
 
             # Get the latest messages
             messages = self.agents_client.messages.list(
-                thread_id=self.current_thread.id, 
+                thread_id=thread.id, 
                 order=ListSortOrder.DESCENDING
             )
             

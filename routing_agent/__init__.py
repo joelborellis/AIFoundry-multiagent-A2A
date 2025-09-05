@@ -10,27 +10,31 @@ import json
 import os
 import traceback
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from routing_agent import RoutingAgent
+if TYPE_CHECKING:
+    from .routing_agent import RoutingAgent
+else:
+    from routing_agent import RoutingAgent
 
 
 class MessageRequest(BaseModel):
     """Request model for sending messages to the routing agent."""
     message: str
     session_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 class RoutingAgentManager:
     """Manager class for the routing agent lifecycle."""
     
     def __init__(self):
-        self.routing_agent: Optional[RoutingAgent] = None
+        self.routing_agent: Optional["RoutingAgent"] = None
     
     async def initialize_routing_agent(self):
         """Initialize the Azure AI routing agent."""
@@ -41,7 +45,7 @@ class RoutingAgentManager:
             self.routing_agent = await RoutingAgent.create(
                 remote_agent_addresses=[
                     os.getenv('SPORTS_RESULTS_URL', 'http://localhost:10001'),
-                    #os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),
+                    os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),
                 ]
             )
             
@@ -133,7 +137,7 @@ async def root():
     if agent_manager.routing_agent and agent_manager.routing_agent.azure_agent:
         agent_status = {
             "azure_agent_id": agent_manager.routing_agent.azure_agent.id,
-            "thread_id": agent_manager.routing_agent.current_thread.id if agent_manager.routing_agent.current_thread else None,
+            "thread_id": agent_manager.routing_agent.get_current_thread_id(),
             "available_remote_agents": len(agent_manager.routing_agent.remote_agent_connections),
             "remote_agents": list(agent_manager.routing_agent.remote_agent_connections.keys())
         }
@@ -163,7 +167,7 @@ async def health_check():
     }
 
 
-async def generate_response_stream(message: str, session_id: Optional[str] = None):
+async def generate_response_stream(message: str, session_id: Optional[str] = None, thread_id: Optional[str] = None):
     """Generate streaming response from the routing agent."""
     if not agent_manager.routing_agent:
         yield f"data: {json.dumps({'error': 'Routing agent not initialized. Please restart the application.'})}\n\n"
@@ -171,7 +175,7 @@ async def generate_response_stream(message: str, session_id: Optional[str] = Non
     
     try:
         # Process the message through Azure AI Agent
-        response = await agent_manager.routing_agent.process_user_message(message)
+        response = await agent_manager.routing_agent.process_user_message(message, thread_id)
         
         # Send the final response
         if response:
@@ -196,7 +200,7 @@ async def chat_stream(request: MessageRequest):
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
     return StreamingResponse(
-        generate_response_stream(request.message, request.session_id),
+        generate_response_stream(request.message, request.session_id, request.thread_id),
         media_type="text/plain",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -222,10 +226,11 @@ async def chat(request: MessageRequest):
         )
     
     try:
-        response = await agent_manager.routing_agent.process_user_message(request.message)
+        response = await agent_manager.routing_agent.process_user_message(request.message, request.thread_id)
         return {
             "response": response,
-            "session_id": request.session_id
+            "session_id": request.session_id,
+            "thread_id": agent_manager.routing_agent.get_current_thread_id()
         }
     except Exception as e:
         print(f"Error in chat endpoint: {e}")

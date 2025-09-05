@@ -44,7 +44,7 @@ class SemanticKernelMCPAgentExecutor(AgentExecutor):
             task = new_task(context.message)
             await event_queue.enqueue_event(task)
 
-        async for partial in self.agent.stream(query, task.contextId):
+        async for partial in self.agent.invoke(query, task.contextId):
             require_input = partial['require_user_input']
             is_done = partial['is_task_complete']
             text_content = partial['content']

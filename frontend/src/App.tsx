@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Bot, User, Activity, Server, Users, MessageCircle, Wifi, Loader2 } from 'lucide-react'
+import { Send, Bot, User, Activity, Server, Users, MessageCircle, Wifi, Loader2, RefreshCw } from 'lucide-react'
 import './App.css'
 
 interface Message {
@@ -29,6 +29,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null)
   const [isConnected, setIsConnected] = useState(false)
+  const [threadId, setThreadId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -50,11 +51,35 @@ function App() {
         const data = await response.json()
         setApiStatus(data)
         setIsConnected(true)
+        
+        // Set thread_id if available from the API status
+        if (data.agent_status && data.agent_status.thread_id) {
+          setThreadId(data.agent_status.thread_id)
+          console.log('Found existing thread ID:', data.agent_status.thread_id)
+        }
       }
     } catch (error) {
       console.error('Failed to fetch API status:', error)
       setIsConnected(false)
     }
+  }
+
+  const startNewConversation = () => {
+    setMessages([])
+    setThreadId(null)
+    
+    // Update API status to reflect no active thread
+    if (apiStatus) {
+      setApiStatus({
+        ...apiStatus,
+        agent_status: {
+          ...apiStatus.agent_status,
+          thread_id: null
+        }
+      })
+    }
+    
+    console.log('Started new conversation - thread_id reset')
   }
 
   const sendMessage = async () => {
@@ -72,12 +97,19 @@ function App() {
     setIsLoading(true)
 
     try {
+      const requestBody = { 
+        message: userMessage.content,
+        thread_id: threadId
+      }
+      
+      console.log('Sending request with thread_id:', threadId)
+      
       const response = await fetch('http://localhost:8083/chat/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message: userMessage.content }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {
@@ -168,6 +200,15 @@ function App() {
           }
         }
       }
+      
+      // After successful response, update thread_id if we didn't have one
+      if (!threadId) {
+        // Fetch the API status again to get the new thread_id
+        setTimeout(async () => {
+          await fetchApiStatus()
+        }, 500) // Small delay to ensure backend has updated
+      }
+      
     } catch (error) {
       console.error('Error sending message:', error)
       const errorMessage: Message = {
@@ -198,11 +239,21 @@ function App() {
             <Bot className="header-icon" />
             <h1>Azure AI Foundry Routing Agent (A2A)</h1>
           </div>
-          <div className="connection-status">
-            <Wifi className={`status-icon ${isConnected ? 'connected' : 'disconnected'}`} />
-            <span className={`status-text ${isConnected ? 'connected' : 'disconnected'}`}>
-              {isConnected ? 'Connected' : 'Disconnected'}
-            </span>
+          <div className="header-actions">
+            <button 
+              onClick={startNewConversation}
+              className="new-conversation-btn"
+              title="Start New Conversation"
+            >
+              <RefreshCw size={16} />
+              New Chat
+            </button>
+            <div className="connection-status">
+              <Wifi className={`status-icon ${isConnected ? 'connected' : 'disconnected'}`} />
+              <span className={`status-text ${isConnected ? 'connected' : 'disconnected'}`}>
+                {isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
           </div>
         </div>
       </header>
@@ -247,7 +298,7 @@ function App() {
                   <div>
                     <div className="item-label">Thread ID</div>
                     <div className="item-value">
-                      {apiStatus.agent_status.thread_id || 'No active thread'}
+                      {threadId || (apiStatus.agent_status.thread_id ? apiStatus.agent_status.thread_id : 'No active thread')}
                     </div>
                   </div>
                 </div>

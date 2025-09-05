@@ -3,11 +3,12 @@ import os
 from collections.abc import AsyncIterable
 from typing import Any
 
+from azure.ai.agents.models import McpTool
 from azure.identity.aio import DefaultAzureCredential
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from semantic_kernel.agents import AzureAIAgent
-from semantic_kernel.connectors.mcp import MCPStreamableHttpPlugin
+from semantic_kernel.agents import AzureAIAgent, AzureAIAgentSettings, AzureAIAgentThread
+from semantic_kernel.contents import ChatMessageContent, FunctionCallContent, FunctionResultContent
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +30,30 @@ class ResponseFormat(BaseModel):
 
 
 class SemanticKernelMCPAgent:
-    """Wraps Azure AI Agent with MCP plugins to handle various tasks."""
+    """Wraps Azure AI Agent with MCP tools to handle various tasks."""
 
     def __init__(self):
         self.agent = None
         self.thread = None
         self.client = None
         self.credential = None
-        self.plugin = None
+        self.agent_definition = None
+
+    async def handle_intermediate_messages(self, message: ChatMessageContent) -> None:
+        """Handle intermediate messages during streaming responses."""
+        for item in message.items or []:
+            if isinstance(item, FunctionResultContent):
+                result_preview = str(item.result)[:150]
+                logger.info(f"Function Result:> {result_preview} for function: {item.name}")
+            elif isinstance(item, FunctionCallContent):
+                logger.info(f"Function Call:> {item.name} with arguments: {item.arguments}")
+            else:
+                logger.info(f"{item}")
 
     async def initialize(self, mcp_url: str = os.getenv("SPORTS_NEWS_MCP_URL")):
-        """Initialize the agent with Azure credentials and MCP plugin."""
+        """Initialize the agent with Azure credentials and MCP tool."""
         try:
-            # Create Azure credential
+            # Create Azure credential with async context manager
             self.credential = DefaultAzureCredential()
             
             # Get Azure AI endpoint from environment
@@ -49,40 +61,57 @@ class SemanticKernelMCPAgent:
             if not endpoint:
                 raise ValueError("AZURE_AI_AGENT_PROJECT_ENDPOINT environment variable is required")
             
+            logger.info(f"Using Azure AI endpoint: {endpoint}")
+            
             # Create Azure AI client with endpoint and credential
             self.client = AzureAIAgent.create_client(
                 endpoint=endpoint,
                 credential=self.credential
             )
             
-            # Create the MCP plugin
-            self.plugin = MCPStreamableHttpPlugin(
-                name="SportsNews",
-                url=mcp_url,
+            # Validate MCP URL
+            if not mcp_url:
+                raise ValueError("SPORTS_NEWS_MCP_URL environment variable is required")
+            
+            logger.info(f"Using MCP URL: {mcp_url}")
+            
+            # Define the MCP tool with the server URL
+            mcp_tool = McpTool(
+                server_label="sports_news",
+                server_url=mcp_url,
+                allowed_tools=[],  # Specify allowed tools if needed
             )
             
-            # Initialize the plugin
-            await self.plugin.__aenter__()
+            # Configure approval mode (optional)
+            # Allowed values are "never" or "always"
+            mcp_tool.set_approval_mode("never")
             
             # Get model deployment name from environment
             model_deployment_name = os.getenv("AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME")
             if not model_deployment_name:
-                raise ValueError("AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME environment variable is required")
+                # Fallback to AzureAIAgentSettings if env var not set
+                model_deployment_name = AzureAIAgentSettings().model_deployment_name
             
-            # Create agent definition
-            agent_definition = await self.client.agents.create_agent(
+            logger.info(f"Using model deployment: {model_deployment_name}")
+            
+            # Create agent definition with the MCP tool
+            self.agent_definition = await self.client.agents.create_agent(
+                name="SportsNewsAgent",
                 model=model_deployment_name,
-                name="SportsNewsAssistant",
-                instructions="You are a helpful agent that processes sports news stories. \
-                    You have available several tools to assist you.  Use the tool that best fits the user request. \
-                    Only use the first 10 'Headline' and 'Link' items from the news story to create your response."
+                tools=mcp_tool.definitions,
+                instructions="You are a helpful agent that generates sports news stories. \
+                    You have available several MCP tools to assist you. Use the tool that best fits the user request. \
+                    All tools will return their results in the following format: \
+                        Headline: \
+                        Link: \
+                    You must use the tools to get the information, do not make up any news stories. \
+                    Include the headline and link in your final response.",
             )
 
-            # Create the agent with MCP plugin
+            # Create the Semantic Kernel agent for the Azure AI agent
             self.agent = AzureAIAgent(
                 client=self.client,
-                definition=agent_definition,
-                plugins=[self.plugin],
+                definition=self.agent_definition,
             )
             
             logger.info("MCP Agent initialized successfully")
@@ -93,12 +122,12 @@ class SemanticKernelMCPAgent:
             raise
 
     
-    async def stream(
+    async def invoke(
         self,
         user_input: str,
         session_id: str = None,
     ) -> AsyncIterable[dict[str, Any]]:
-        """Stream responses from the Azure AI Agent with MCP plugins.
+        """Stream responses from the Azure AI Agent with MCP tools.
 
         Args:
             user_input (str): User input message.
@@ -116,9 +145,11 @@ class SemanticKernelMCPAgent:
             return
 
         try:
-            async for response in self.agent.invoke(
+            # Invoke the agent with streaming for response
+            async for response in self.agent.invoke_stream(
                 messages=user_input,
                 thread=self.thread,
+                on_intermediate_message=self.handle_intermediate_messages,
             ):
                 self.thread = response.thread
                 yield {
@@ -251,14 +282,6 @@ class SemanticKernelMCPAgent:
             logger.error(f"Error deleting agent: {e}")
         
         try:
-            if self.plugin:
-                await self.plugin.__aexit__(None, None, None)
-                self.plugin = None
-                logger.info("MCP plugin cleaned up successfully")
-        except Exception as e:
-            logger.error(f"Error cleaning up MCP plugin: {e}")
-        
-        try:
             if self.client:
                 await self.client.close()
                 self.client = None
@@ -275,3 +298,4 @@ class SemanticKernelMCPAgent:
             logger.error(f"Error closing credential: {e}")
         
         self.agent = None
+        self.agent_definition = None

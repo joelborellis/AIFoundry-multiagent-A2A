@@ -1,0 +1,7 @@
+MCP Tool Call Results Summary
+Generated: 2025-09-05 15:06:34
+Tool called: get_nascar_news
+Content length: 12539 characters
+Estimated tokens for GPT-4.1-mini: 3313
+
+Original content saved to: mcp_results_20250905_150634.txt
