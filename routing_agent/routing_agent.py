@@ -214,7 +214,9 @@ Your role:
 Available Agents: {self.agents}
 Currently Active Agent: {current_agent['active_agent']}
 
-Always be helpful and route requests to the most appropriate agent."""
+Always be helpful and route requests to the most appropriate agent.
+
+Always respond in html format."""
 
     def check_active_agent(self):
         """Check the currently active agent."""

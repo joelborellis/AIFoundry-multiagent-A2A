@@ -11,6 +11,8 @@ remote_agents/sports_results_agent/__pycache__
 remote_agents/sports_results_agent/.venv
 remote_agents/sports_results_agent/.env
 
+frontend/node_modules/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
