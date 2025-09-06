@@ -3,7 +3,7 @@ import os
 import time
 import uuid
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 import httpx
 
@@ -31,59 +31,24 @@ load_dotenv()
 
 
 class AzureAgentContext:
-    """Context class to replace Google ADK ReadonlyContext."""
+    """Context class."""
     def __init__(self):
         self.state: Dict[str, Any] = {}
-
-
-def convert_part(part: Part) -> str:
-    """Convert a part to text. Only text parts are supported."""
-    if part.type == 'text':
-        return part.text
-
-    return f'Unknown type: {part.type}'
-
-
-def convert_parts(parts: list[Part]) -> List[str]:
-    """Convert parts to text."""
-    rval = []
-    for p in parts:
-        rval.append(convert_part(p))
-    return rval
-
-
-def create_send_message_payload(
-    text: str, task_id: str | None = None, context_id: str | None = None
-) -> dict[str, Any]:
-    """Helper function to create the payload for sending a task."""
-    payload: dict[str, Any] = {
-        'message': {
-            'role': 'user',
-            'parts': [{'type': 'text', 'text': text}],
-            'messageId': uuid.uuid4().hex,
-        },
-    }
-
-    if task_id:
-        payload['message']['taskId'] = task_id
-
-    if context_id:
-        payload['message']['contextId'] = context_id
-    return payload
-
 
 class RoutingAgent:
     """The Routing agent.
 
-    This is the agent responsible for choosing which remote seller agents to send
-    tasks to and coordinate their work using Azure AI Agents.
+    This is the agent responsible for choosing which remote sports agents to send
+    tasks to and coordinate their work using multiple different Agent types.
     """
 
     def __init__(
         self,
         task_callback: TaskUpdateCallback | None = None,
+        status_callback: Callable[[str, str], None] | None = None,
     ):
         self.task_callback = task_callback
+        self.status_callback = status_callback
         self.remote_agent_connections: dict[str, RemoteAgentConnections] = {}
         self.cards: dict[str, AgentCard] = {}
         self.agents: str = ''
@@ -137,9 +102,10 @@ class RoutingAgent:
         cls,
         remote_agent_addresses: list[str],
         task_callback: TaskUpdateCallback | None = None,
+        status_callback: Callable[[str, str], None] | None = None,
     ) -> 'RoutingAgent':
         """Create and asynchronously initialize an instance of the RoutingAgent."""
-        instance = cls(task_callback)
+        instance = cls(task_callback, status_callback)
         await instance._async_init_components(remote_agent_addresses)
         return instance
 
@@ -153,31 +119,33 @@ class RoutingAgent:
             print(f"Creating AIFoundry routing agent with model: {model_name}")
             print(f"Instructions length: {len(instructions)} characters")
 
-            tools = [{
-                "type": "function",
-                "function": {
-                    "name": "send_message",
-                    "description": "Sends a task to a remote agent",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "agent_name": {
-                                "type": "string",
-                                "description": "The name of the agent to send the task to"
+            # Only include send_message tool if remote agents are available
+            tools = []
+            if self.remote_agent_connections:
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": "send_message",
+                        "description": "Sends a task to a remote agent",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "agent_name": {
+                                    "type": "string",
+                                    "description": "The name of the agent to send the task to"
+                                },
+                                "task": {
+                                    "type": "string",
+                                    "description": "The comprehensive conversation context summary and goal to be achieved"
+                                }
                             },
-                            "task": {
-                                "type": "string",
-                                "description": "The comprehensive conversation context summary and goal to be achieved"
-                            }
-                        },
-                        "required": ["agent_name", "task"]
+                            "required": ["agent_name", "task"]
+                        }
                     }
-                }
-            }]
- 
-
-            # toolset = ToolSet()
-            # toolset.add(send_message_tool)
+                })
+                print(f"Added send_message tool - {len(self.remote_agent_connections)} remote agents available")
+            else:
+                print("No remote agents available - running without function tools")
             
             self.azure_agent = self.agents_client.create_agent(
                 model=model_name,
@@ -186,10 +154,6 @@ class RoutingAgent:
                 tools=tools
             )
             print(f"Created Azure AI agent, agent ID: {self.azure_agent.id}")
-            
-            # Don't create a thread here anymore - it will be created per conversation
-            # self.current_thread = self.agents_client.threads.create()
-            # print(f"Created thread, thread ID: {self.current_thread.id}")
             
             return self.azure_agent
             
@@ -230,18 +194,32 @@ class RoutingAgent:
     def get_root_instruction(self) -> str:
         """Generate the root instruction for the RoutingAgent."""
         current_agent = self.check_active_agent()
+        available_agents = self.list_remote_agents()
+        
+        if available_agents:
+            agents_info = self.agents
+            routing_instructions = """
+- Delegate user inquiries to appropriate specialized remote agents
+- Connect users with sports_news_agent for sports news requests  
+- Connect users with sports_results_agent for sports results requests
+- Use the send_message function to route requests to the appropriate agent"""
+        else:
+            agents_info = "No remote agents currently available"
+            routing_instructions = """
+- No specialized remote agents are currently available
+- Provide helpful general responses directly to users
+- Inform users that specialized agents are currently unavailable
+- Do NOT use the send_message function when no agents are available"""
+
         return f"""You are an expert Routing Delegator that helps users with sports information requests.
 
 Your role:
-- Delegate user inquiries to appropriate specialized remote agents
-- Provide clear and helpful responses to users
-- Connect users with sports_news_agent for sports news requests
-- Connect users with sports_results_agent for sports results requests
+{routing_instructions}
 
-Available Agents: {self.agents}
+Available Agents: {agents_info}
 Currently Active Agent: {current_agent['active_agent']}
 
-Always be helpful and route requests to the most appropriate agent.
+Always be helpful and provide useful responses to users.
 
 Always respond in html format."""
 
@@ -282,7 +260,7 @@ Always respond in html format."""
     async def send_message(
         self, agent_name: str, task: str
     ):
-        """Sends a task to remote seller agent.
+        """Sends a task to remote sports agent.
 
         This will send a message to the remote agent named agent_name.
 
@@ -294,11 +272,27 @@ Always respond in html format."""
         Returns:
             A Task object from the remote agent response.
         """
+        # Check if any remote agents are available
+        if not self.remote_agent_connections:
+            return {
+                "error": "No remote agents are currently available. The sports news and results agents are not running.",
+                "message": "Please ensure the remote agents are started before trying to route requests."
+            }
+            
         if agent_name not in self.remote_agent_connections:
-            raise ValueError(f'Agent {agent_name} not found')
+            available_agents = list(self.remote_agent_connections.keys())
+            return {
+                "error": f"Agent '{agent_name}' not found. Available agents: {available_agents}",
+                "available_agents": available_agents
+            }
         
         state = self.context.state
         state['active_agent'] = agent_name
+        
+        # Notify about agent execution start via callback
+        if self.status_callback:
+            self.status_callback("agent_start", agent_name)
+        
         client = self.remote_agent_connections[agent_name]
 
         if not client:
@@ -351,6 +345,10 @@ Always respond in html format."""
         if not isinstance(send_response.root.result, Task):
             print('received non-task response. Aborting get task ')
             return
+
+        # Notify about agent execution completion via callback
+        if self.status_callback:
+            self.status_callback("agent_complete", agent_name)
 
         return send_response.root.result
 

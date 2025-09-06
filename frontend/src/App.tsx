@@ -23,6 +23,12 @@ interface ApiStatus {
   agent_status: AgentStatus
 }
 
+interface CurrentExecution {
+  isExecuting: boolean
+  agentName: string | null
+  status: string
+}
+
 function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -30,6 +36,11 @@ function App() {
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [threadId, setThreadId] = useState<string | null>(null)
+  const [currentExecution, setCurrentExecution] = useState<CurrentExecution>({
+    isExecuting: false,
+    agentName: null,
+    status: ''
+  })
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -67,6 +78,11 @@ function App() {
   const startNewConversation = () => {
     setMessages([])
     setThreadId(null)
+    setCurrentExecution({
+      isExecuting: false,
+      agentName: null,
+      status: ''
+    })
     
     // Update API status to reflect no active thread
     if (apiStatus) {
@@ -153,6 +169,12 @@ function App() {
                     )
                   )
                 }
+                // Clear execution status when response is received
+                setCurrentExecution({
+                  isExecuting: false,
+                  agentName: null,
+                  status: ''
+                })
               } else if (data.type === 'status') {
                 if (!assistantMessage) {
                   // Create the assistant message for status
@@ -172,6 +194,29 @@ function App() {
                         : msg
                     )
                   )
+                }
+              } else if (data.type === 'agent_status') {
+                // Handle agent execution status updates
+                if (data.status_type === 'agent_start') {
+                  setCurrentExecution({
+                    isExecuting: true,
+                    agentName: data.agent_name,
+                    status: `Executing ${data.agent_name}`
+                  })
+                } else if (data.status_type === 'agent_complete') {
+                  setCurrentExecution({
+                    isExecuting: false,
+                    agentName: data.agent_name,
+                    status: `Completed ${data.agent_name}`
+                  })
+                  // Clear after a short delay
+                  setTimeout(() => {
+                    setCurrentExecution({
+                      isExecuting: false,
+                      agentName: null,
+                      status: ''
+                    })
+                  }, 2000)
                 }
               } else if (data.type === 'error') {
                 if (!assistantMessage) {
@@ -193,6 +238,12 @@ function App() {
                     )
                   )
                 }
+                // Clear execution status on error
+                setCurrentExecution({
+                  isExecuting: false,
+                  agentName: null,
+                  status: ''
+                })
               }
             } catch (e) {
               console.error('Error parsing SSE data:', e)
@@ -220,6 +271,12 @@ function App() {
       setMessages(prev => [...prev, errorMessage])
     } finally {
       setIsLoading(false)
+      // Clear execution status when request is completely done
+      setCurrentExecution({
+        isExecuting: false,
+        agentName: null,
+        status: ''
+      })
     }
   }
 
@@ -272,6 +329,27 @@ function App() {
                   <div className="loading-dot"></div>
                   <div className="loading-dot"></div>
                   <div className="loading-dot"></div>
+                </div>
+              </div>
+            )}
+            {currentExecution.isExecuting && (
+              <div className="current-execution">
+                <div className="execution-header">
+                  <Loader2 className="execution-icon spinning" />
+                  <span className="execution-text">Currently Executing</span>
+                </div>
+                <div className="execution-agent">
+                  <strong>{currentExecution.agentName}</strong>
+                </div>
+              </div>
+            )}
+            {!currentExecution.isExecuting && currentExecution.agentName && (
+              <div className="execution-complete">
+                <div className="completion-header">
+                  ✅ <span className="completion-text">Recently Completed</span>
+                </div>
+                <div className="completion-agent">
+                  <strong>{currentExecution.agentName}</strong>
                 </div>
               </div>
             )}

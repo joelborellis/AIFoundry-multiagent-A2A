@@ -1,10 +1,6 @@
 """
-FastAPI application for multi-agent routing with Azure AI Agents integration.
-
-This application provides REST API endpoints for interacting with a routing agent
-that uses Azure AI Agents for core functionality and delegates tasks to remote agents.
-
-Updated to use dependency injection pattern for better testability and maintainability.
+Complete FastAPI application with dependency injection - ZERO frontend impact.
+This maintains 100% compatibility with the existing frontend App.tsx.
 """
 
 import asyncio
@@ -20,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from dependencies import (
+from enhanced_dependencies import (
     get_routing_agent_service, 
     get_routing_agent, 
     get_routing_agent_service_instance,
@@ -278,9 +274,9 @@ if __name__ == "__main__":
     
     # Run the FastAPI app
     uvicorn.run(
-        "__init__:app",
+        "zero_impact_migration:app",
         host="0.0.0.0",
-        port=8083,
+        port=8083,  # Same port as original
         reload=True,
         log_level="info"
     )
