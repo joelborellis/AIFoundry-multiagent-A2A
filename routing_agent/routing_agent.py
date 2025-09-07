@@ -3,7 +3,7 @@ import os
 import time
 import uuid
 
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, Optional, Callable
 
 import httpx
 
@@ -11,7 +11,6 @@ from a2a.client import A2ACardResolver
 from a2a.types import (
     AgentCard,
     MessageSendParams,
-    Part,
     SendMessageRequest,
     SendMessageResponse,
     SendMessageSuccessResponse,
@@ -22,10 +21,15 @@ from remote_agent_connection import (
     TaskUpdateCallback,
 )
 from azure.ai.agents import AgentsClient
+from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 from azure.ai.agents.models import ListSortOrder
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry import trace
 from dotenv import load_dotenv
 
+# Enable Azure tracing with content recording
+os.environ["AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED"] = "true"
 
 load_dotenv()
 
@@ -54,6 +58,14 @@ class RoutingAgent:
         self.agents: str = ''
         self.context = AzureAgentContext()
         
+        # Rate limiting tracking
+        self.request_count = 0
+        self.rate_limit_errors = 0
+        self.last_request_time = None
+        
+        # Initialize telemetry tracing
+        self._initialize_telemetry()
+        
         # Initialize Azure AI Agents client
         self.agents_client = AgentsClient(
             endpoint=os.environ["AZURE_AI_AGENT_PROJECT_ENDPOINT"],
@@ -62,40 +74,91 @@ class RoutingAgent:
         self.azure_agent = None
         self.current_thread = None
 
+    def _initialize_telemetry(self):
+        """Initialize Azure Monitor telemetry for tracing."""
+        try:
+            # Initialize AI Project client for telemetry
+            project_client = AIProjectClient(
+                credential=DefaultAzureCredential(),
+                endpoint=os.environ["AZURE_AI_AGENT_PROJECT_ENDPOINT"],
+            )
+            
+            # Get Application Insights connection string and configure monitoring
+            connection_string = project_client.telemetry.get_application_insights_connection_string()
+            configure_azure_monitor(connection_string=connection_string)
+            
+            # Initialize tracer
+            self.tracer = trace.get_tracer(__name__)
+            print("✅ Telemetry tracing initialized successfully")
+            
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to initialize telemetry tracing: {e}")
+            # Create a no-op tracer if telemetry fails
+            self.tracer = trace.get_tracer(__name__)
+
     async def _async_init_components(
         self, remote_agent_addresses: list[str]
     ) -> None:
         """Asynchronous part of initialization."""
-        # Use a single httpx.AsyncClient for all card resolutions for efficiency
-        async with httpx.AsyncClient(timeout=30) as client:
-            for address in remote_agent_addresses:
-                card_resolver = A2ACardResolver(
-                    client, address
-                )  # Constructor is sync
-                try:
-                    card = (
-                        await card_resolver.get_agent_card()
-                    )  # get_agent_card is async
+        with self.tracer.start_as_current_span("init_remote_agent_connections") as span:
+            span.set_attribute("remote_agents.count", len(remote_agent_addresses))
+            span.set_attribute("remote_agents.addresses", str(remote_agent_addresses))
+            
+            # Use a single httpx.AsyncClient for all card resolutions for efficiency
+            async with httpx.AsyncClient(timeout=30) as client:
+                successful_connections = 0
+                failed_connections = 0
+                
+                for address in remote_agent_addresses:
+                    with self.tracer.start_as_current_span("connect_remote_agent") as agent_span:
+                        agent_span.set_attribute("agent.address", address)
+                        
+                        card_resolver = A2ACardResolver(
+                            client, address
+                        )  # Constructor is sync
+                        try:
+                            card = (
+                                await card_resolver.get_agent_card()
+                            )  # get_agent_card is async
 
-                    remote_connection = RemoteAgentConnections(
-                        agent_card=card, agent_url=address
-                    )
-                    self.remote_agent_connections[card.name] = remote_connection
-                    self.cards[card.name] = card
-                except httpx.ConnectError as e:
-                    print(
-                        f'ERROR: Failed to get agent card from {address}: {e}'
-                    )
-                except Exception as e:  # Catch other potential errors
-                    print(
-                        f'ERROR: Failed to initialize connection for {address}: {e}'
-                    )
+                            remote_connection = RemoteAgentConnections(
+                                agent_card=card, agent_url=address
+                            )
+                            self.remote_agent_connections[card.name] = remote_connection
+                            self.cards[card.name] = card
+                            
+                            agent_span.set_attribute("agent.name", card.name)
+                            agent_span.set_attribute("agent.success", True)
+                            successful_connections += 1
+                            
+                        except httpx.ConnectError as e:
+                            agent_span.set_attribute("agent.success", False)
+                            agent_span.set_attribute("error.type", "connection_error")
+                            agent_span.set_attribute("error.message", str(e))
+                            failed_connections += 1
+                            print(
+                                f'ERROR: Failed to get agent card from {address}: {e}'
+                            )
+                        except Exception as e:  # Catch other potential errors
+                            agent_span.set_attribute("agent.success", False)
+                            agent_span.set_attribute("error.type", "general_error")
+                            agent_span.set_attribute("error.message", str(e))
+                            failed_connections += 1
+                            print(
+                                f'ERROR: Failed to initialize connection for {address}: {e}'
+                            )
 
-        # Populate self.agents using the logic from original __init__ (via list_remote_agents)
-        agent_info = []
-        for agent_detail_dict in self.list_remote_agents():
-            agent_info.append(json.dumps(agent_detail_dict))
-        self.agents = '\n'.join(agent_info)
+            span.set_attribute("connections.successful", successful_connections)
+            span.set_attribute("connections.failed", failed_connections)
+            
+            # Populate self.agents using the logic from original __init__ (via list_remote_agents)
+            agent_info = []
+            for agent_detail_dict in self.list_remote_agents():
+                agent_info.append(json.dumps(agent_detail_dict))
+            self.agents = '\n'.join(agent_info)
+            
+            span.set_attribute("agents.info_generated", True)
+            span.set_attribute("agents.total_available", len(self.cards))
 
     @classmethod
     async def create(
@@ -105,87 +168,124 @@ class RoutingAgent:
         status_callback: Callable[[str, str], None] | None = None,
     ) -> 'RoutingAgent':
         """Create and asynchronously initialize an instance of the RoutingAgent."""
-        instance = cls(task_callback, status_callback)
-        await instance._async_init_components(remote_agent_addresses)
-        return instance
+        # Create a temporary tracer for the factory method
+        temp_tracer = trace.get_tracer(__name__)
+        
+        with temp_tracer.start_as_current_span("create_routing_agent") as span:
+            span.set_attribute("factory.method", "create")
+            span.set_attribute("remote_agents.count", len(remote_agent_addresses))
+            
+            instance = cls(task_callback, status_callback)
+            await instance._async_init_components(remote_agent_addresses)
+            
+            span.set_attribute("instance.created", True)
+            span.set_attribute("instance.remote_connections", len(instance.remote_agent_connections))
+            
+            return instance
 
     def create_agent(self):
         """Create an Azure AI Agent instance."""
-        instructions = self.get_root_instruction()
-        
-        try:
-            # Create Azure AI Agent with better error handling
-            model_name = os.environ.get("AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME", "gpt-4.1-mini")
-            print(f"Creating AIFoundry routing agent with model: {model_name}")
-            print(f"Instructions length: {len(instructions)} characters")
+        with self.tracer.start_as_current_span("create_azure_agent") as span:
+            instructions = self.get_root_instruction()
+            
+            try:
+                # Create Azure AI Agent with better error handling
+                model_name = os.environ.get("AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME", "gpt-4.1-mini")
+                
+                # Add span attributes for better observability
+                span.set_attribute("agent.model", model_name)
+                span.set_attribute("agent.instructions_length", len(instructions))
+                span.set_attribute("agent.remote_agents_count", len(self.remote_agent_connections))
+                
+                print(f"Creating AIFoundry routing agent with model: {model_name}")
+                print(f"Instructions length: {len(instructions)} characters")
 
-            # Only include send_message tool if remote agents are available
-            tools = []
-            if self.remote_agent_connections:
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": "send_message",
-                        "description": "Sends a task to a remote agent",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "agent_name": {
-                                    "type": "string",
-                                    "description": "The name of the agent to send the task to"
+                # Only include send_message tool if remote agents are available
+                tools = []
+                if self.remote_agent_connections:
+                    tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": "send_message",
+                            "description": "Sends a task to a remote agent",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "agent_name": {
+                                        "type": "string",
+                                        "description": "The name of the agent to send the task to"
+                                    },
+                                    "task": {
+                                        "type": "string",
+                                        "description": "The comprehensive conversation context summary and goal to be achieved"
+                                    }
                                 },
-                                "task": {
-                                    "type": "string",
-                                    "description": "The comprehensive conversation context summary and goal to be achieved"
-                                }
-                            },
-                            "required": ["agent_name", "task"]
+                                "required": ["agent_name", "task"]
+                            }
                         }
-                    }
-                })
-                print(f"Added send_message tool - {len(self.remote_agent_connections)} remote agents available")
-            else:
-                print("No remote agents available - running without function tools")
-            
-            self.azure_agent = self.agents_client.create_agent(
-                model=model_name,
-                name="routing-agent",
-                instructions=instructions,
-                tools=tools
-            )
-            print(f"Created Azure AI agent, agent ID: {self.azure_agent.id}")
-            
-            return self.azure_agent
-            
-        except Exception as e:
-            print(f"Error creating Azure AI agent: {e}")
-            print(f"Model name used: {model_name}")
-            print(f"Instructions: {instructions[:200]}...")
-            raise
+                    })
+                    span.set_attribute("agent.tools_enabled", True)
+                    print(f"Added send_message tool - {len(self.remote_agent_connections)} remote agents available")
+                else:
+                    span.set_attribute("agent.tools_enabled", False)
+                    print("No remote agents available - running without function tools")
+                
+                self.azure_agent = self.agents_client.create_agent(
+                    model=model_name,
+                    name="routing-agent",
+                    instructions=instructions,
+                    tools=tools
+                )
+                
+                span.set_attribute("agent.id", self.azure_agent.id)
+                span.set_attribute("agent.created", True)
+                print(f"Created Azure AI agent, agent ID: {self.azure_agent.id}")
+                
+                return self.azure_agent
+                
+            except Exception as e:
+                span.set_attribute("agent.created", False)
+                span.set_attribute("error.message", str(e))
+                span.record_exception(e)
+                print(f"Error creating Azure AI agent: {e}")
+                print(f"Model name used: {model_name}")
+                print(f"Instructions: {instructions[:200]}...")
+                raise
 
     def get_or_create_thread(self, thread_id: Optional[str] = None):
         """Get an existing thread or create a new one if thread_id is not provided."""
-        try:
-            if thread_id:
-                # Try to get the existing thread
-                try:
-                    thread = self.agents_client.threads.get(thread_id=thread_id)
-                    self.current_thread = thread
-                    print(f"Using existing thread, thread ID: {thread.id}")
-                    return thread
-                except Exception as e:
-                    print(f"Failed to get existing thread {thread_id}: {e}")
-                    # Fall through to create a new thread
-            
-            # Create a new thread
-            thread = self.agents_client.threads.create()
-            self.current_thread = thread
-            print(f"Created new thread, thread ID: {thread.id}")
-            return thread
-            
-        except Exception as e:
-            print(f"Error creating/getting thread: {e}")
-            raise
+        with self.tracer.start_as_current_span("get_or_create_thread") as span:
+            try:
+                span.set_attribute("thread.requested_id", thread_id or "new")
+                
+                if thread_id:
+                    # Try to get the existing thread
+                    try:
+                        thread = self.agents_client.threads.get(thread_id=thread_id)
+                        self.current_thread = thread
+                        span.set_attribute("thread.action", "retrieved_existing")
+                        span.set_attribute("thread.id", thread.id)
+                        print(f"Using existing thread, thread ID: {thread.id}")
+                        return thread
+                    except Exception as e:
+                        span.set_attribute("thread.retrieval_failed", True)
+                        span.set_attribute("thread.retrieval_error", str(e))
+                        print(f"Failed to get existing thread {thread_id}: {e}")
+                        # Fall through to create a new thread
+                
+                # Create a new thread
+                thread = self.agents_client.threads.create()
+                self.current_thread = thread
+                span.set_attribute("thread.action", "created_new")
+                span.set_attribute("thread.id", thread.id)
+                print(f"Created new thread, thread ID: {thread.id}")
+                return thread
+                
+            except Exception as e:
+                span.set_attribute("thread.error", str(e))
+                span.record_exception(e)
+                print(f"Error creating/getting thread: {e}")
+                raise
 
     def get_current_thread_id(self) -> Optional[str]:
         """Get the current thread ID."""
@@ -194,9 +294,10 @@ class RoutingAgent:
     def get_root_instruction(self) -> str:
         """Generate the root instruction for the RoutingAgent."""
         current_agent = self.check_active_agent()
-        available_agents = self.list_remote_agents()
+        # Use the already computed self.cards instead of calling list_remote_agents again
+        has_available_agents = bool(self.cards)
         
-        if available_agents:
+        if has_available_agents:
             agents_info = self.agents
             routing_instructions = """
 - Delegate user inquiries to appropriate specialized remote agents
@@ -272,171 +373,288 @@ Always respond in html format."""
         Returns:
             A Task object from the remote agent response.
         """
-        # Check if any remote agents are available
-        if not self.remote_agent_connections:
-            return {
-                "error": "No remote agents are currently available. The sports news and results agents are not running.",
-                "message": "Please ensure the remote agents are started before trying to route requests."
-            }
+        with self.tracer.start_as_current_span("send_message_to_remote_agent") as span:
+            span.set_attribute("remote_agent.name", agent_name)
+            span.set_attribute("task.length", len(task))
+            span.set_attribute("task.word_count", len(task.split()))
             
-        if agent_name not in self.remote_agent_connections:
-            available_agents = list(self.remote_agent_connections.keys())
-            return {
-                "error": f"Agent '{agent_name}' not found. Available agents: {available_agents}",
-                "available_agents": available_agents
+            # Check if any remote agents are available
+            if not self.remote_agent_connections:
+                span.set_attribute("error.type", "no_remote_agents")
+                return {
+                    "error": "No remote agents are currently available. The sports news and results agents are not running.",
+                    "message": "Please ensure the remote agents are started before trying to route requests."
+                }
+                
+            if agent_name not in self.remote_agent_connections:
+                available_agents = list(self.remote_agent_connections.keys())
+                span.set_attribute("error.type", "agent_not_found")
+                span.set_attribute("available_agents", str(available_agents))
+                return {
+                    "error": f"Agent '{agent_name}' not found. Available agents: {available_agents}",
+                    "available_agents": available_agents
+                }
+            
+            state = self.context.state
+            state['active_agent'] = agent_name
+            
+            # Notify about agent execution start via callback
+            if self.status_callback:
+                self.status_callback("agent_start", agent_name)
+            
+            client = self.remote_agent_connections[agent_name]
+
+            if not client:
+                span.set_attribute("error.type", "client_unavailable")
+                raise ValueError(f'Client not available for {agent_name}')
+            
+            task_id = state['task_id'] if 'task_id' in state else str(uuid.uuid4())
+
+            if 'context_id' in state:
+                context_id = state['context_id']
+            else:
+                context_id = str(uuid.uuid4())
+
+            message_id = ''
+            metadata = {}
+            if 'input_message_metadata' in state:
+                metadata.update(**state['input_message_metadata'])
+                if 'message_id' in state['input_message_metadata']:
+                    message_id = state['input_message_metadata']['message_id']
+            if not message_id:
+                message_id = str(uuid.uuid4())
+
+            span.set_attribute("message.id", message_id)
+            span.set_attribute("task.id", task_id)
+            span.set_attribute("context.id", context_id)
+
+            payload = {
+                'message': {
+                    'role': 'user',
+                    'parts': [
+                        {'type': 'text', 'text': task}
+                    ],  # Use the 'task' argument here
+                    'messageId': message_id,
+                },
             }
-        
-        state = self.context.state
-        state['active_agent'] = agent_name
-        
-        # Notify about agent execution start via callback
-        if self.status_callback:
-            self.status_callback("agent_start", agent_name)
-        
-        client = self.remote_agent_connections[agent_name]
 
-        if not client:
-            raise ValueError(f'Client not available for {agent_name}')
-        
-        task_id = state['task_id'] if 'task_id' in state else str(uuid.uuid4())
+            if task_id:
+                payload['message']['taskId'] = task_id
 
-        if 'context_id' in state:
-            context_id = state['context_id']
-        else:
-            context_id = str(uuid.uuid4())
+            if context_id:
+                payload['message']['contextId'] = context_id
 
-        message_id = ''
-        metadata = {}
-        if 'input_message_metadata' in state:
-            metadata.update(**state['input_message_metadata'])
-            if 'message_id' in state['input_message_metadata']:
-                message_id = state['input_message_metadata']['message_id']
-        if not message_id:
-            message_id = str(uuid.uuid4())
+            with self.tracer.start_as_current_span("remote_agent_call") as call_span:
+                call_span.set_attribute("remote_agent.name", agent_name)
+                call_span.set_attribute("payload.message_id", message_id)
+                
+                message_request = SendMessageRequest(
+                    id=message_id, params=MessageSendParams.model_validate(payload)
+                )
+                send_response: SendMessageResponse = await client.send_message(
+                    message_request=message_request
+                )
+                print('send_response', send_response.model_dump_json(exclude_none=True, indent=2))
 
-        payload = {
-            'message': {
-                'role': 'user',
-                'parts': [
-                    {'type': 'text', 'text': task}
-                ],  # Use the 'task' argument here
-                'messageId': message_id,
-            },
-        }
+                if not isinstance(send_response.root, SendMessageSuccessResponse):
+                    call_span.set_attribute("success", False)
+                    call_span.set_attribute("error.type", "non_success_response")
+                    print('received non-success response. Aborting get task ')
+                    return
 
-        if task_id:
-            payload['message']['taskId'] = task_id
+                if not isinstance(send_response.root.result, Task):
+                    call_span.set_attribute("success", False)
+                    call_span.set_attribute("error.type", "non_task_response")
+                    print('received non-task response. Aborting get task ')
+                    return
 
-        if context_id:
-            payload['message']['contextId'] = context_id
+                call_span.set_attribute("success", True)
+                span.set_attribute("success", True)
 
-        message_request = SendMessageRequest(
-            id=message_id, params=MessageSendParams.model_validate(payload)
-        )
-        send_response: SendMessageResponse = await client.send_message(
-            message_request=message_request
-        )
-        print('send_response', send_response.model_dump_json(exclude_none=True, indent=2))
+            # Notify about agent execution completion via callback
+            if self.status_callback:
+                self.status_callback("agent_complete", agent_name)
 
-        if not isinstance(send_response.root, SendMessageSuccessResponse):
-            print('received non-success response. Aborting get task ')
-            return
-
-        if not isinstance(send_response.root.result, Task):
-            print('received non-task response. Aborting get task ')
-            return
-
-        # Notify about agent execution completion via callback
-        if self.status_callback:
-            self.status_callback("agent_complete", agent_name)
-
-        return send_response.root.result
+            return send_response.root.result
 
     async def process_user_message(self, user_message: str, thread_id: Optional[str] = None) -> str:
         """Process a user message through Azure AI Agent and return the response."""
-        if not hasattr(self, 'azure_agent') or not self.azure_agent:
-            return "Azure AI Agent not initialized. Please ensure the agent is properly created."
-        
-        try:
-            # Initialize session if needed
-            self.initialize_session()
+        with self.tracer.start_as_current_span("process_user_message") as span:
+            if not hasattr(self, 'azure_agent') or not self.azure_agent:
+                span.set_attribute("error.type", "agent_not_initialized")
+                return "Azure AI Agent not initialized. Please ensure the agent is properly created."
             
-            # Get or create thread based on provided thread_id
-            thread = self.get_or_create_thread(thread_id)
-            
-            print(f"Processing message: {user_message[:50]}...")
-            
-            # Create message in the thread
-            message = self.agents_client.messages.create(
-                thread_id=thread.id, 
-                role="user", 
-                content=user_message
-            )
-            print(f"Created message, message ID: {message.id}")
-
-            # Create and run the agent
-            print(f"Creating run with agent ID: {self.azure_agent.id}")
-            run = self.agents_client.runs.create(
-                thread_id=thread.id, 
-                agent_id=self.azure_agent.id
-            )
-            print(f"Created run, run ID: {run.id}")
-
-            # Poll the run until completion
-            max_iterations = 60  # 60 seconds timeout
-            iteration = 0
-            while run.status in ["queued", "in_progress", "requires_action"] and iteration < max_iterations:
-                # Handle function calls if needed
-                if run.status == "requires_action":
-                    await self._handle_required_actions(run)
+            try:
+                # Add span attributes for input tracking
+                span.set_attribute("message.length", len(user_message))
+                span.set_attribute("message.word_count", len(user_message.split()))
+                span.set_attribute("message.estimated_tokens", len(user_message.split()) * 1.3)
+                span.set_attribute("thread.requested_id", thread_id or "new")
                 
-                time.sleep(1)
-                iteration += 1
-                run = self.agents_client.runs.get(
-                    thread_id=thread.id, 
-                    run_id=run.id
-                )
-                print(f"Run status: {run.status} (iteration {iteration})")
-
-            if iteration >= max_iterations:
-                return "Request timed out after 60 seconds. Please try again."
-
-            if run.status == "failed":
-                error_info = f"Run error: {run.last_error}"
-                print(error_info)
+                # Initialize session if needed
+                self.initialize_session()
                 
-                # Try to get more detailed error information
-                if hasattr(run, 'last_error') and run.last_error:
-                    if hasattr(run.last_error, 'code'):
-                        error_info += f" (Code: {run.last_error.code})"
-                    if hasattr(run.last_error, 'message'):
-                        error_info += f" (Message: {run.last_error.message})"
+                # Get or create thread based on provided thread_id
+                thread = self.get_or_create_thread(thread_id)
+                span.set_attribute("thread.id", thread.id)
                 
-                return f"Error processing request: {error_info}"
+                print(f"Processing message: {user_message[:50]}...")
+                print(f"Message length: {len(user_message)} characters")
+                print(f"Estimated tokens: ~{len(user_message.split()) * 1.3:.0f} (rough estimate)")
+                
+                # Create message in the thread
+                with self.tracer.start_as_current_span("create_message") as message_span:
+                    self._track_request()
+                    message = self.agents_client.messages.create(
+                        thread_id=thread.id, 
+                        role="user", 
+                        content=user_message
+                    )
+                    message_span.set_attribute("message.id", message.id)
+                    span.set_attribute("message.id", message.id)
+                    print(f"Created message, message ID: {message.id}")
 
-            # Get the latest messages
-            messages = self.agents_client.messages.list(
-                thread_id=thread.id, 
-                order=ListSortOrder.DESCENDING
-            )
-            
-            # Return the assistant's response
-            for msg in messages:
-                if msg.role == "assistant" and msg.text_messages:
-                    last_text = msg.text_messages[-1]
-                    return last_text.text.value
-            
-            return "No response received from agent."
-            
-        except Exception as e:
-            error_msg = f"Error in process_user_message: {e}"
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
-            
-            # Enhanced error handling for rate limits
-            enhanced_error_message = self._parse_rate_limit_error(e)
-            return enhanced_error_message
+                # Create and run the agent
+                with self.tracer.start_as_current_span("create_and_run_agent") as run_span:
+                    print(f"Creating run with agent ID: {self.azure_agent.id}")
+                    print(f"Model: {os.environ.get('AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME', 'unknown')}")
+                    
+                    # Add timestamp for rate limit tracking
+                    import datetime
+                    start_time = datetime.datetime.now()
+                    run_span.set_attribute("run.start_time", start_time.isoformat())
+                    print(f"Run started at: {start_time}")
+                    
+                    self._track_request()
+                    run = self.agents_client.runs.create(
+                        thread_id=thread.id, 
+                        agent_id=self.azure_agent.id
+                    )
+                    run_span.set_attribute("run.id", run.id)
+                    span.set_attribute("run.id", run.id)
+                    print(f"Created run, run ID: {run.id}")
+
+                    # Poll the run until completion with adaptive polling
+                    with self.tracer.start_as_current_span("poll_run_completion") as poll_span:
+                        max_iterations = 60  # 60 seconds timeout
+                        iteration = 0
+                        
+                        while run.status in ["queued", "in_progress", "requires_action"] and iteration < max_iterations:
+                            # Handle function calls if needed
+                            if run.status == "requires_action":
+                                with self.tracer.start_as_current_span("handle_required_actions"):
+                                    await self._handle_required_actions(run)
+                            
+                            # Use adaptive sleep time based on error rate
+                            sleep_time = self._calculate_wait_time()
+                            time.sleep(sleep_time)
+                            iteration += 1
+                            
+                            try:
+                                self._track_request()
+                                run = self.agents_client.runs.get(
+                                    thread_id=thread.id, 
+                                    run_id=run.id
+                                )
+                                print(f"Run status is: {run.status} (iteration {iteration}, slept {sleep_time:.1f}s)")
+                            except Exception as e:
+                                print(f"Error getting run status (iteration {iteration}): {e}")
+                                # Check if this is a rate limit error
+                                if "rate" in str(e).lower() or "limit" in str(e).lower():
+                                    self._track_rate_limit_error()
+                                # If we can't get status, wait longer and try again
+                                time.sleep(5)
+                                continue
+
+                        poll_span.set_attribute("poll.iterations", iteration)
+                        poll_span.set_attribute("poll.final_status", run.status)
+                        
+                        if iteration >= max_iterations:
+                            span.set_attribute("error.type", "timeout")
+                            span.set_attribute("run.timeout", True)
+                            return "Request timed out after 60 seconds. Please try again."
+
+                        if run.status == "failed":
+                            # Track rate limit errors
+                            error_str = str(run.last_error) if run.last_error else ""
+                            if any(term in error_str.lower() for term in ["rate", "limit", "quota", "throttle"]):
+                                self._track_rate_limit_error()
+                                span.set_attribute("error.type", "rate_limit")
+                            else:
+                                span.set_attribute("error.type", "run_failed")
+                            
+                            span.set_attribute("run.failed", True)
+                            span.set_attribute("run.error", error_str)
+                            
+                            error_info = f"Run error: {run.last_error}"
+                            print(error_info)
+                            
+                            # Enhanced debugging for rate limit errors
+                            if hasattr(run, 'last_error') and run.last_error:
+                                print(f"Full error object: {run.last_error}")
+                                print(f"Error type: {type(run.last_error)}")
+                                
+                                error_details = {}
+                                if hasattr(run.last_error, 'code'):
+                                    error_details['code'] = run.last_error.code
+                                    error_info += f" (Code: {run.last_error.code})"
+                                if hasattr(run.last_error, 'message'):
+                                    error_details['message'] = run.last_error.message
+                                    error_info += f" (Message: {run.last_error.message})"
+                                if hasattr(run.last_error, 'type'):
+                                    error_details['type'] = run.last_error.type
+                                    error_info += f" (Type: {run.last_error.type})"
+                                if hasattr(run.last_error, 'param'):
+                                    error_details['param'] = run.last_error.param
+                                    error_info += f" (Param: {run.last_error.param})"
+                                
+                                print(f"Error details extracted: {error_details}")
+                                
+                                # Check if this is a rate limit error and provide specific guidance
+                                if (error_details.get('code') == 'rate_limit_exceeded' or 
+                                    'rate limit' in str(run.last_error).lower() or
+                                    'quota' in str(run.last_error).lower()):
+                                    
+                                    # Provide specific rate limit troubleshooting
+                                    rate_limit_msg = self._analyze_rate_limit_error(run.last_error, error_details)
+                                    return rate_limit_msg
+                            
+                            return f"Error processing request: {error_info}"
+
+                # Get the latest messages and return response
+                with self.tracer.start_as_current_span("get_response_messages") as response_span:
+                    self._track_request()
+                    messages = self.agents_client.messages.list(
+                        thread_id=thread.id, 
+                        order=ListSortOrder.DESCENDING
+                    )
+                    
+                    # Return the assistant's response
+                    for msg in messages:
+                        if msg.role == "assistant" and msg.text_messages:
+                            last_text = msg.text_messages[-1]
+                            response_content = last_text.text.value
+                            response_span.set_attribute("response.length", len(response_content))
+                            response_span.set_attribute("response.word_count", len(response_content.split()))
+                            span.set_attribute("success", True)
+                            return response_content
+                    
+                    span.set_attribute("success", False)
+                    span.set_attribute("error.type", "no_response")
+                    return "No response received from agent."
+                    
+            except Exception as e:
+                span.set_attribute("success", False)
+                span.set_attribute("error.message", str(e))
+                span.record_exception(e)
+                error_msg = f"Error in process_user_message: {e}"
+                print(error_msg)
+                import traceback
+                traceback.print_exc()
+                
+                # Enhanced error handling for rate limits
+                enhanced_error_message = self._parse_rate_limit_error(e)
+                return enhanced_error_message
 
     def _parse_rate_limit_error(self, error: Exception) -> str:
         """
@@ -528,6 +746,139 @@ Always respond in html format."""
         
         # Default error handling for non-rate-limit errors
         return f"An error occurred while processing your message: {str(error)}"
+
+    def _track_request(self):
+        """Track API requests for rate limiting analysis"""
+        current_time = time.time()
+        self.request_count += 1
+        
+        if self.last_request_time:
+            time_since_last = current_time - self.last_request_time
+            print(f"[Rate Tracking] Request #{self.request_count}, {time_since_last:.2f}s since last request")
+        else:
+            print(f"[Rate Tracking] First request #{self.request_count}")
+            
+        self.last_request_time = current_time
+    
+    def _track_rate_limit_error(self):
+        """Track rate limit errors for pattern analysis"""
+        self.rate_limit_errors += 1
+        error_rate = (self.rate_limit_errors / self.request_count) * 100 if self.request_count > 0 else 0
+        print(f"[Rate Limit] Error #{self.rate_limit_errors} of {self.request_count} requests ({error_rate:.1f}% error rate)")
+    
+    def _calculate_wait_time(self) -> float:
+        """Calculate adaptive wait time based on error rate"""
+        if self.rate_limit_errors == 0:
+            return 2.0  # Base polling interval
+        
+        error_rate = self.rate_limit_errors / max(self.request_count, 1)
+        if error_rate > 0.5:  # High error rate
+            return 10.0
+        elif error_rate > 0.25:  # Medium error rate
+            return 5.0
+        else:  # Low error rate
+            return 3.0
+
+    def _analyze_rate_limit_error(self, last_error, error_details: dict) -> str:
+        """
+        Analyze Azure AI Agent rate limit errors to provide specific troubleshooting guidance.
+        
+        Args:
+            last_error: The last_error object from the failed run
+            error_details: Dictionary of extracted error details
+            
+        Returns:
+            str: Specific troubleshooting message for the rate limit issue
+        """
+        error_msg = str(last_error).lower()
+        
+        # Check for specific rate limit patterns
+        is_tpm_limit = any(keyword in error_msg for keyword in [
+            "token", "tpm", "tokens per minute", "token limit", "token quota"
+        ])
+        
+        is_rpm_limit = any(keyword in error_msg for keyword in [
+            "request", "rpm", "requests per minute", "request limit", "too many requests"
+        ])
+        
+        # Model deployment information
+        model_name = os.environ.get("AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME", "unknown")
+        
+        if is_tpm_limit:
+            return f"""⚠️ **Azure AI Agent - Token Rate Limit Exceeded (TPM)**
+
+**Issue:** Your Azure AI Agent has exceeded the Tokens Per Minute (TPM) limit.
+**Model:** {model_name}
+
+**Common Causes:**
+• Large input messages consuming too many tokens
+• Multiple concurrent requests processing simultaneously
+• Model deployment has low TPM quota allocation
+
+**Immediate Solutions:**
+• Wait 60 seconds before retrying
+• Reduce input message length
+• Break complex requests into smaller parts
+
+**Long-term Solutions:**
+• Increase TPM quota in Azure AI Studio
+• Use a higher-tier deployment
+• Implement request queuing/throttling
+
+**Technical Details:**
+Code: {error_details.get('code', 'N/A')}
+Message: {error_details.get('message', 'N/A')}
+Full Error: {last_error}"""
+
+        elif is_rpm_limit:
+            return f"""⚠️ **Azure AI Agent - Request Rate Limit Exceeded (RPM)**
+
+**Issue:** Your Azure AI Agent has exceeded the Requests Per Minute (RPM) limit.
+**Model:** {model_name}
+
+**Common Causes:**
+• Too many API calls in quick succession
+• Multiple users/sessions hitting the same deployment
+• Low RPM quota for your deployment tier
+
+**Immediate Solutions:**
+• Wait 60 seconds before retrying
+• Reduce request frequency
+• Implement exponential backoff
+
+**Long-term Solutions:**
+• Increase RPM quota in Azure AI Studio
+• Upgrade to higher-tier deployment
+• Implement request caching for repeated queries
+
+**Technical Details:**
+Code: {error_details.get('code', 'N/A')}
+Message: {error_details.get('message', 'N/A')}
+Full Error: {last_error}"""
+
+        else:
+            return f"""⚠️ **Azure AI Agent - Rate Limit Exceeded**
+
+**Issue:** A rate limit has been exceeded, but the specific type is unclear.
+**Model:** {model_name}
+
+**General Solutions:**
+• Wait 60 seconds before retrying
+• Check your Azure AI Studio quotas and usage
+• Consider upgrading your deployment tier
+• Implement request throttling in your application
+
+**Debugging Information:**
+Code: {error_details.get('code', 'N/A')}
+Message: {error_details.get('message', 'N/A')}
+Type: {error_details.get('type', 'N/A')}
+Param: {error_details.get('param', 'N/A')}
+Full Error: {last_error}
+
+**Next Steps:**
+1. Check Azure AI Studio → Deployments → Quotas
+2. Monitor usage patterns in Azure portal
+3. Consider implementing retry logic with exponential backoff"""
 
     async def _handle_required_actions(self, run):
         """Handle function calls required by the Azure AI Agent."""

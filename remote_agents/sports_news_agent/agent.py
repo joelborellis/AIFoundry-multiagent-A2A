@@ -95,8 +95,15 @@ class SemanticKernelMCPAgent:
             logger.info(f"Using model deployment: {model_deployment_name}")
             
             # Create agent definition with the MCP tool
+            # Use a unique name with timestamp to avoid conflicts with existing agents
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            agent_name = f"SportsNewsAgent_{timestamp}"
+            
+            logger.info(f"Creating agent with name: {agent_name}")
+            
             self.agent_definition = await self.client.agents.create_agent(
-                name="SportsNewsAgent",
+                name=agent_name,
                 model=model_deployment_name,
                 tools=mcp_tool.definitions,
                 instructions="You are a helpful agent that generates sports news stories. \
@@ -107,6 +114,8 @@ class SemanticKernelMCPAgent:
                     You must use the tools to get the information, do not make up any news stories. \
                     Include the headline and link in your final response.",
             )
+            
+            logger.info(f"Created agent definition with ID: {self.agent_definition.id}")
 
             # Create the Semantic Kernel agent for the Azure AI agent
             self.agent = AzureAIAgent(
@@ -165,7 +174,24 @@ class SemanticKernelMCPAgent:
                 'content': 'Task completed successfully.',
             }
         except Exception as e:
-            # Enhanced error handling for rate limits
+            # Check for "assistant not found" error specifically
+            error_str = str(e).lower()
+            if "no assistant found" in error_str or "assistant" in error_str and "not found" in error_str:
+                logger.error(f"Assistant not found error: {e}")
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': True,
+                    'content': f'⚠️ **Agent Configuration Issue**\n\n'
+                              f'The Azure AI Agent assistant was not found. This typically happens when:\n'
+                              f'• The agent was deleted from Azure AI Studio\n'
+                              f'• The agent configuration has changed\n'
+                              f'• There are permission issues\n\n'
+                              f'**Solution:** Restart the sports news agent to create a new assistant.\n\n'
+                              f'**Technical details:** {e}',
+                }
+                return
+            
+            # Enhanced error handling for rate limits and other errors
             error_message = self._parse_rate_limit_error(e)
             yield {
                 'is_task_complete': False,
@@ -266,36 +292,54 @@ class SemanticKernelMCPAgent:
 
     async def cleanup(self):
         """Cleanup resources."""
+        cleanup_errors = []
+        
+        # Clean up thread
         try:
             if self.thread:
                 await self.thread.delete()
                 self.thread = None
                 logger.info("Thread deleted successfully")
         except Exception as e:
+            cleanup_errors.append(f"Error deleting thread: {e}")
             logger.error(f"Error deleting thread: {e}")
         
+        # Clean up agent
         try:
-            if self.agent and self.client:
-                await self.client.agents.delete_agent(self.agent.id)
-                logger.info("Agent deleted successfully")
+            if self.agent_definition and self.client:
+                # Use agent_definition.id instead of self.agent.id for more reliability
+                await self.client.agents.delete_agent(self.agent_definition.id)
+                logger.info(f"Agent {self.agent_definition.id} deleted successfully")
         except Exception as e:
+            cleanup_errors.append(f"Error deleting agent: {e}")
             logger.error(f"Error deleting agent: {e}")
         
+        # Clean up client
         try:
             if self.client:
                 await self.client.close()
                 self.client = None
                 logger.info("Client closed successfully")
         except Exception as e:
+            cleanup_errors.append(f"Error closing client: {e}")
             logger.error(f"Error closing client: {e}")
         
+        # Clean up credential
         try:
             if self.credential:
                 await self.credential.close()
                 self.credential = None
                 logger.info("Credential closed successfully")
         except Exception as e:
+            cleanup_errors.append(f"Error closing credential: {e}")
             logger.error(f"Error closing credential: {e}")
         
+        # Reset all agent references
         self.agent = None
         self.agent_definition = None
+        
+        # Log summary of cleanup
+        if cleanup_errors:
+            logger.warning(f"Cleanup completed with {len(cleanup_errors)} errors: {cleanup_errors}")
+        else:
+            logger.info("Cleanup completed successfully")
