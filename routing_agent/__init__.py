@@ -1,3 +1,4 @@
+
 """
 FastAPI application for multi-agent routing with Azure AI Agents integration.
 
@@ -78,12 +79,20 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI app
+# Create FastAPI app
 app = FastAPI(
     title="Azure AI Routing Agent API",
     description="REST API for multi-agent routing with Azure AI Agents integration",
     version="1.0.0",  # Keep same version to avoid frontend confusion
     lifespan=lifespan
 )
+
+# Endpoint to reset the thread_id (current_thread) in the backend
+@app.post("/reset")
+async def reset_thread(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
+    if hasattr(routing_agent, 'current_thread'):
+        routing_agent.current_thread = None
+    return {"status": "reset", "thread_id": None}
 
 # Add CORS middleware for React frontend
 app.add_middleware(
@@ -153,7 +162,7 @@ async def generate_response_stream(
     
     try:
         # Send initial status - EXACT same format as before
-        yield f"data: {json.dumps({'type': 'status', 'content': 'Processing your request...'})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'content': '🤖 Agent working...'})}\n\n"
         
         # Create a task to process the user message
         async def process_message():

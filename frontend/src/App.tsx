@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import mcpLogo from './assets/mcp.png'
+import microsoftLogo from './assets/microsoft.png'
+import openaiLogo from './assets/openai.png'
 import { Send, Bot, User, Activity, Server, Users, MessageCircle, Wifi, Loader2, RefreshCw } from 'lucide-react'
 import './App.css'
 
@@ -52,7 +55,30 @@ function App() {
   }, [messages])
 
   useEffect(() => {
-    fetchApiStatus()
+    // On reload, clear thread_id and reset state (frontend and backend)
+    const resetAll = async () => {
+      setMessages([])
+      setThreadId(null)
+      setCurrentExecution({
+        isExecuting: false,
+        agentName: null,
+        status: ''
+      })
+      setApiStatus(prev => prev ? {
+        ...prev,
+        agent_status: {
+          ...prev.agent_status,
+          thread_id: null
+        }
+      } : prev)
+      try {
+        await fetch('http://localhost:8083/reset', { method: 'POST' })
+      } catch (e) {
+        console.warn('Failed to reset backend thread_id:', e)
+      }
+      fetchApiStatus()
+    }
+    resetAll()
   }, [])
 
   const fetchApiStatus = async () => {
@@ -75,7 +101,7 @@ function App() {
     }
   }
 
-  const startNewConversation = () => {
+  const startNewConversation = async () => {
     setMessages([])
     setThreadId(null)
     setCurrentExecution({
@@ -83,8 +109,6 @@ function App() {
       agentName: null,
       status: ''
     })
-    
-    // Update API status to reflect no active thread
     if (apiStatus) {
       setApiStatus({
         ...apiStatus,
@@ -94,8 +118,13 @@ function App() {
         }
       })
     }
-    
-    console.log('Started new conversation - thread_id reset')
+    try {
+      await fetch('http://localhost:8083/reset', { method: 'POST' })
+    } catch (e) {
+      console.warn('Failed to reset backend thread_id:', e)
+    }
+    fetchApiStatus()
+    console.log('Started new conversation - thread_id reset (frontend and backend)')
   }
 
   const sendMessage = async () => {
@@ -376,7 +405,7 @@ function App() {
                   <div>
                     <div className="item-label">Thread ID</div>
                     <div className="item-value">
-                      {threadId || (apiStatus.agent_status.thread_id ? apiStatus.agent_status.thread_id : 'No active thread')}
+                      {threadId || apiStatus.agent_status.thread_id ? (threadId || apiStatus.agent_status.thread_id) : 'No active thread'}
                     </div>
                   </div>
                 </div>
@@ -391,9 +420,17 @@ function App() {
                   <div className="remote-agents">
                     <h4>Available Agents:</h4>
                     {apiStatus.agent_status.remote_agents.map((agent, index) => (
-                      <div key={index} className="remote-agent-item">
-                        <div className="agent-dot"></div>
-                        {agent}
+                      <div key={index} className="remote-agent-item" style={{ display: 'flex', alignItems: 'center', minHeight: 40 }}>
+                        <span style={{ minWidth: 140, display: 'inline-block' }}>{agent}</span>
+                        {agent === 'SportsNewsAgent' && (
+                          <>
+                            <img src={microsoftLogo} alt="Microsoft Logo" className="agent-logo" style={{ width: 32, height: 32, marginLeft: 6, marginRight: 2, verticalAlign: 'middle' }} />
+                            <img src={mcpLogo} alt="MCP Logo" className="agent-logo" style={{ width: 32, height: 32, marginLeft: 2, marginRight: 6, verticalAlign: 'middle' }} />
+                          </>
+                        )}
+                        {agent === 'SportsResultsAgent' && (
+                          <img src={openaiLogo} alt="OpenAI Logo" className="agent-logo" style={{ width: 32, height: 32, marginLeft: 6, marginRight: 6, verticalAlign: 'middle' }} />
+                        )}
                       </div>
                     ))}
                   </div>
