@@ -504,7 +504,7 @@ Always respond in html format."""
                 
                 # Create message in the thread
                 with self.tracer.start_as_current_span("create_message") as message_span:
-                    self._track_request()
+                    # ...existing code...
                     message = self.agents_client.messages.create(
                         thread_id=thread.id, 
                         role="user", 
@@ -525,7 +525,7 @@ Always respond in html format."""
                     run_span.set_attribute("run.start_time", start_time.isoformat())
                     print(f"Run started at: {start_time}")
                     
-                    self._track_request()
+                    # ...existing code...
                     run = self.agents_client.runs.create(
                         thread_id=thread.id, 
                         agent_id=self.azure_agent.id
@@ -545,13 +545,12 @@ Always respond in html format."""
                                 with self.tracer.start_as_current_span("handle_required_actions"):
                                     await self._handle_required_actions(run)
                             
-                            # Use adaptive sleep time based on error rate
-                            sleep_time = self._calculate_wait_time()
+                            # Use fixed sleep time now that rate tracking is removed
+                            sleep_time = 2.0
                             time.sleep(sleep_time)
                             iteration += 1
                             
                             try:
-                                self._track_request()
                                 run = self.agents_client.runs.get(
                                     thread_id=thread.id, 
                                     run_id=run.id
@@ -561,7 +560,7 @@ Always respond in html format."""
                                 print(f"Error getting run status (iteration {iteration}): {e}")
                                 # Check if this is a rate limit error
                                 if "rate" in str(e).lower() or "limit" in str(e).lower():
-                                    self._track_rate_limit_error()
+                                    pass
                                 # If we can't get status, wait longer and try again
                                 time.sleep(5)
                                 continue
@@ -578,7 +577,7 @@ Always respond in html format."""
                             # Track rate limit errors
                             error_str = str(run.last_error) if run.last_error else ""
                             if any(term in error_str.lower() for term in ["rate", "limit", "quota", "throttle"]):
-                                self._track_rate_limit_error()
+                                # ...existing code...
                                 span.set_attribute("error.type", "rate_limit")
                             else:
                                 span.set_attribute("error.type", "run_failed")
@@ -623,7 +622,7 @@ Always respond in html format."""
 
                 # Get the latest messages and return response
                 with self.tracer.start_as_current_span("get_response_messages") as response_span:
-                    self._track_request()
+                    # ...existing code...
                     messages = self.agents_client.messages.list(
                         thread_id=thread.id, 
                         order=ListSortOrder.DESCENDING
@@ -651,234 +650,7 @@ Always respond in html format."""
                 print(error_msg)
                 import traceback
                 traceback.print_exc()
-                
-                # Enhanced error handling for rate limits
-                enhanced_error_message = self._parse_rate_limit_error(e)
-                return enhanced_error_message
-
-    def _parse_rate_limit_error(self, error: Exception) -> str:
-        """
-        Parse rate limit errors to provide specific information about the type of limit exceeded.
-        
-        Args:
-            error: The exception that was raised
-            
-        Returns:
-            str: A descriptive error message indicating the type of rate limit
-        """
-        error_str = str(error).lower()
-        error_type = type(error).__name__
-        
-        # Check for common rate limit indicators
-        if "rate limit" in error_str or "quota" in error_str or "429" in error_str:
-            # Check for tokens per minute (TPM) rate limit
-            if any(keyword in error_str for keyword in ["token", "tpm", "tokens per minute"]):
-                return (f"⚠️ **Rate Limit Exceeded: Tokens Per Minute (TPM)**\n\n"
-                       f"The request exceeded the allowed tokens per minute limit. "
-                       f"This typically means too many tokens are being processed in a short time period.\n\n"
-                       f"**Suggestions:**\n"
-                       f"• Wait a moment before retrying\n"
-                       f"• Reduce the length of your input\n"
-                       f"• Break large requests into smaller chunks\n\n"
-                       f"**Technical details:** {error_type}: {str(error)}")
-            
-            # Check for requests per minute (RPM) rate limit
-            elif any(keyword in error_str for keyword in ["request", "rpm", "requests per minute", "too many requests"]):
-                return (f"⚠️ **Rate Limit Exceeded: Requests Per Minute (RPM)**\n\n"
-                       f"The request exceeded the allowed requests per minute limit. "
-                       f"This typically means too many API calls are being made in a short time period.\n\n"
-                       f"**Suggestions:**\n"
-                       f"• Wait a moment before retrying\n"
-                       f"• Reduce the frequency of requests\n"
-                       f"• Implement request batching if possible\n\n"
-                       f"**Technical details:** {error_type}: {str(error)}")
-            
-            # Check for Azure OpenAI specific patterns within rate limit context
-            elif "azure" in error_str and ("openai" in error_str or "cognitive" in error_str):
-                return (f"⚠️ **Azure OpenAI Quota Exceeded**\n\n"
-                       f"Your Azure OpenAI service quota has been exceeded. This could be either "
-                       f"tokens per minute (TPM) or requests per minute (RPM).\n\n"
-                       f"**Suggestions:**\n"
-                       f"• Check your Azure OpenAI resource usage in the Azure portal\n"
-                       f"• Wait for the quota to reset\n"
-                       f"• Consider upgrading your Azure OpenAI pricing tier\n\n"
-                       f"**Technical details:** {error_type}: {str(error)}")
-            
-            # Check for OpenAI specific patterns within rate limit context
-            elif "openai" in error_str:
-                return (f"⚠️ **OpenAI Quota Exceeded**\n\n"
-                       f"Your OpenAI API quota has been exceeded. This could be either "
-                       f"tokens per minute (TPM) or requests per minute (RPM).\n\n"
-                       f"**Suggestions:**\n"
-                       f"• Check your OpenAI API usage dashboard\n"
-                       f"• Wait for the quota to reset\n"
-                       f"• Consider upgrading your OpenAI plan\n\n"
-                       f"**Technical details:** {error_type}: {str(error)}")
-            
-            # Generic rate limit error
-            else:
-                return (f"⚠️ **Rate Limit Exceeded**\n\n"
-                       f"A rate limit has been exceeded, but the specific type could not be determined.\n\n"
-                       f"**Suggestions:**\n"
-                       f"• Wait a moment before retrying\n"
-                       f"• Check your API usage and limits\n"
-                       f"• Consider reducing request frequency or size\n\n"
-                       f"**Technical details:** {error_type}: {str(error)}")
-        
-        # Check for usage/limit patterns outside of explicit rate limit context
-        elif ("usage" in error_str or "limit" in error_str) and ("openai" in error_str or "azure" in error_str):
-            if "azure" in error_str:
-                return (f"⚠️ **Azure Service Usage Limit Reached**\n\n"
-                       f"Your Azure service has reached its usage limit.\n\n"
-                       f"**Suggestions:**\n"
-                       f"• Check your Azure resource usage in the Azure portal\n"
-                       f"• Wait for the limit to reset\n"
-                       f"• Consider upgrading your service tier\n\n"
-                       f"**Technical details:** {error_type}: {str(error)}")
-            else:
-                return (f"⚠️ **OpenAI Usage Limit Reached**\n\n"
-                       f"Your OpenAI API has reached its usage limit.\n\n"
-                       f"**Suggestions:**\n"
-                       f"• Check your OpenAI API usage dashboard\n"
-                       f"• Wait for the limit to reset\n"
-                       f"• Consider upgrading your OpenAI plan\n\n"
-                       f"**Technical details:** {error_type}: {str(error)}")
-        
-        # Default error handling for non-rate-limit errors
-        return f"An error occurred while processing your message: {str(error)}"
-
-    def _track_request(self):
-        """Track API requests for rate limiting analysis"""
-        current_time = time.time()
-        self.request_count += 1
-        
-        if self.last_request_time:
-            time_since_last = current_time - self.last_request_time
-            print(f"[Rate Tracking] Request #{self.request_count}, {time_since_last:.2f}s since last request")
-        else:
-            print(f"[Rate Tracking] First request #{self.request_count}")
-            
-        self.last_request_time = current_time
     
-    def _track_rate_limit_error(self):
-        """Track rate limit errors for pattern analysis"""
-        self.rate_limit_errors += 1
-        error_rate = (self.rate_limit_errors / self.request_count) * 100 if self.request_count > 0 else 0
-        print(f"[Rate Limit] Error #{self.rate_limit_errors} of {self.request_count} requests ({error_rate:.1f}% error rate)")
-    
-    def _calculate_wait_time(self) -> float:
-        """Calculate adaptive wait time based on error rate"""
-        if self.rate_limit_errors == 0:
-            return 2.0  # Base polling interval
-        
-        error_rate = self.rate_limit_errors / max(self.request_count, 1)
-        if error_rate > 0.5:  # High error rate
-            return 10.0
-        elif error_rate > 0.25:  # Medium error rate
-            return 5.0
-        else:  # Low error rate
-            return 3.0
-
-    def _analyze_rate_limit_error(self, last_error, error_details: dict) -> str:
-        """
-        Analyze Azure AI Agent rate limit errors to provide specific troubleshooting guidance.
-        
-        Args:
-            last_error: The last_error object from the failed run
-            error_details: Dictionary of extracted error details
-            
-        Returns:
-            str: Specific troubleshooting message for the rate limit issue
-        """
-        error_msg = str(last_error).lower()
-        
-        # Check for specific rate limit patterns
-        is_tpm_limit = any(keyword in error_msg for keyword in [
-            "token", "tpm", "tokens per minute", "token limit", "token quota"
-        ])
-        
-        is_rpm_limit = any(keyword in error_msg for keyword in [
-            "request", "rpm", "requests per minute", "request limit", "too many requests"
-        ])
-        
-        # Model deployment information
-        model_name = os.environ.get("AZURE_AI_AGENT_MODEL_DEPLOYMENT_NAME", "unknown")
-        
-        if is_tpm_limit:
-            return f"""⚠️ **Azure AI Agent - Token Rate Limit Exceeded (TPM)**
-
-**Issue:** Your Azure AI Agent has exceeded the Tokens Per Minute (TPM) limit.
-**Model:** {model_name}
-
-**Common Causes:**
-• Large input messages consuming too many tokens
-• Multiple concurrent requests processing simultaneously
-• Model deployment has low TPM quota allocation
-
-**Immediate Solutions:**
-• Wait 60 seconds before retrying
-• Reduce input message length
-• Break complex requests into smaller parts
-
-**Long-term Solutions:**
-• Increase TPM quota in Azure AI Studio
-• Use a higher-tier deployment
-• Implement request queuing/throttling
-
-**Technical Details:**
-Code: {error_details.get('code', 'N/A')}
-Message: {error_details.get('message', 'N/A')}
-Full Error: {last_error}"""
-
-        elif is_rpm_limit:
-            return f"""⚠️ **Azure AI Agent - Request Rate Limit Exceeded (RPM)**
-
-**Issue:** Your Azure AI Agent has exceeded the Requests Per Minute (RPM) limit.
-**Model:** {model_name}
-
-**Common Causes:**
-• Too many API calls in quick succession
-• Multiple users/sessions hitting the same deployment
-• Low RPM quota for your deployment tier
-
-**Immediate Solutions:**
-• Wait 60 seconds before retrying
-• Reduce request frequency
-• Implement exponential backoff
-
-**Long-term Solutions:**
-• Increase RPM quota in Azure AI Studio
-• Upgrade to higher-tier deployment
-• Implement request caching for repeated queries
-
-**Technical Details:**
-Code: {error_details.get('code', 'N/A')}
-Message: {error_details.get('message', 'N/A')}
-Full Error: {last_error}"""
-
-        else:
-            return f"""⚠️ **Azure AI Agent - Rate Limit Exceeded**
-
-**Issue:** A rate limit has been exceeded, but the specific type is unclear.
-**Model:** {model_name}
-
-**General Solutions:**
-• Wait 60 seconds before retrying
-• Check your Azure AI Studio quotas and usage
-• Consider upgrading your deployment tier
-• Implement request throttling in your application
-
-**Debugging Information:**
-Code: {error_details.get('code', 'N/A')}
-Message: {error_details.get('message', 'N/A')}
-Type: {error_details.get('type', 'N/A')}
-Param: {error_details.get('param', 'N/A')}
-Full Error: {last_error}
-
-**Next Steps:**
-1. Check Azure AI Studio → Deployments → Quotas
-2. Monitor usage patterns in Azure portal
-3. Consider implementing retry logic with exponential backoff"""
 
     async def _handle_required_actions(self, run):
         """Handle function calls required by the Azure AI Agent."""
