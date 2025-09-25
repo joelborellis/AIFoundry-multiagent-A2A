@@ -74,7 +74,7 @@ class RoutingAgentService:
             self._routing_agent = await RoutingAgent.create(
                 remote_agent_addresses=[
                     os.getenv('SPORTS_RESULTS_URL', 'http://localhost:10001'),
-                    os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),
+                    #os.getenv('SPORTS_NEWS_URL', 'http://localhost:10002'),
                 ],
                 status_callback=self.status_callback  # Pass the callback
             )
