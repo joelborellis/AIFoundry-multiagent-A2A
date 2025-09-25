@@ -28,7 +28,7 @@ class RemoteAgentConnections:
         #print(f'agent_url: {agent_url}')
         self._httpx_client = httpx.AsyncClient(timeout=30)
         self.agent_client = A2AClient(
-            self._httpx_client, agent_card, url=agent_url
+            self._httpx_client, agent_card, url=f'{agent_url}/message:send'
         )
         self.card = agent_card
 
