@@ -15,6 +15,7 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional, Annotated
+import uvicorn
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -283,7 +284,6 @@ async def list_agents(routing_agent: Annotated[RoutingAgent, Depends(get_routing
 
 
 if __name__ == "__main__":
-    import uvicorn
     
     # Run the FastAPI app
     uvicorn.run(

@@ -23,11 +23,6 @@ class ResponseFormat(BaseModel):
     message: str
 
 
-# endregion
-
-# region Azure AI Agent with MCP
-
-
 class OpenAIWebSearchAgent:
     """Wraps OpenAI Agent with WebSearchTool to handle various tasks."""
 

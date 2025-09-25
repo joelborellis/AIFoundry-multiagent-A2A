@@ -17,4 +17,5 @@ dependencies = [
     "azure-ai-projects>=1.0.0",
     "azure-monitor-opentelemetry>=1.7.0",
     "opentelemetry-sdk>=1.36.0",
+    "pydantic>=2.11.7",
 ]
