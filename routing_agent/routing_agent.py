@@ -1,6 +1,8 @@
 import json
 import os
 import time
+from pydantic import BaseModel
+from typing import List, Literal, Optional
 import uuid
 
 from typing import Any, Dict, Optional, Callable
@@ -32,6 +34,40 @@ from dotenv import load_dotenv
 os.environ["AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED"] = "true"
 
 load_dotenv()
+
+class Part(BaseModel):
+    kind: Literal["text"]
+    text: str
+
+class Artifact(BaseModel):
+    artifactId: str
+    description: Optional[str] = None
+    name: Optional[str] = None
+    parts: List[Part] = []
+
+class Message(BaseModel):
+    contextId: str
+    kind: Literal["message"]
+    messageId: str
+    parts: List[Part]
+    role: str
+    taskId: str
+
+class Status(BaseModel):
+    state: str
+
+class Result(BaseModel):
+    artifacts: List[Artifact] = []
+    contextId: str
+    history: List[Message] = []
+    id: str
+    kind: str
+    status: Status
+
+class Envelope(BaseModel):
+    id: str
+    jsonrpc: str
+    result: Result
 
 
 class AzureAgentContext:
@@ -73,7 +109,7 @@ class RoutingAgent:
         )
         self.azure_agent = None
         self.current_thread = None
-
+        
     def _initialize_telemetry(self):
         """Initialize Azure Monitor telemetry for tracing."""
         try:
@@ -168,20 +204,9 @@ class RoutingAgent:
         status_callback: Callable[[str, str], None] | None = None,
     ) -> 'RoutingAgent':
         """Create and asynchronously initialize an instance of the RoutingAgent."""
-        # Create a temporary tracer for the factory method
-        temp_tracer = trace.get_tracer(__name__)
-        
-        with temp_tracer.start_as_current_span("create_routing_agent") as span:
-            span.set_attribute("factory.method", "create")
-            span.set_attribute("remote_agents.count", len(remote_agent_addresses))
-            
-            instance = cls(task_callback, status_callback)
-            await instance._async_init_components(remote_agent_addresses)
-            
-            span.set_attribute("instance.created", True)
-            span.set_attribute("instance.remote_connections", len(instance.remote_agent_connections))
-            
-            return instance
+        instance = cls(task_callback, status_callback)
+        await instance._async_init_components(remote_agent_addresses)
+        return instance
 
     def create_agent(self):
         """Create an Azure AI Agent instance."""
@@ -357,7 +382,7 @@ Always respond in html format."""
                 {'name': card.name, 'description': card.description}
             )
         return remote_agent_info
-
+    
     async def send_message(
         self, agent_name: str, task: str
     ):
@@ -467,7 +492,36 @@ Always respond in html format."""
                     call_span.set_attribute("error.type", "non_task_response")
                     print('received non-task response. Aborting get task ')
                     return
+                
+                # History as (role, text) pairs
+                agent_response = send_response.model_dump_json(exclude_none=True, indent=2)
+                env = Envelope.model_validate_json(agent_response)
+                
+                # Now you have typed dot-access:
+                task_id        = env.result.id
+                state          = env.result.status.state
+                context_id     = env.result.contextId
+                artifact_text  = env.result.artifacts[0].parts[0].text  # "Task completed successfully."
+                first_user_msg = next((m for m in env.result.history if m.role == "user"), None)
+                first_user_txt = " ".join(p.text for p in first_user_msg.parts) if first_user_msg else None
 
+                # Last agent message text (often the “answer”)
+                last_agent_msg = next((m for m in reversed(env.result.history) if m.role == "agent"), None)
+                last_agent_txt = " ".join(p.text for p in last_agent_msg.parts) if last_agent_msg else None
+                
+                captured = {
+                    "envelope_id": env.id,
+                    "task_id": task_id,
+                    "state": state,
+                    "context_id": context_id,
+                    "artifact_text": artifact_text,
+                    "first_user_text": first_user_txt,
+                    "last_agent_text": last_agent_txt,
+                }
+
+                print(f"captured: {captured}")
+
+                call_span.set_attribute("agent_response", captured)
                 call_span.set_attribute("success", True)
                 span.set_attribute("success", True)
 
