@@ -3,12 +3,9 @@ Enhanced dependency injection with full status queue support.
 Maintains complete compatibility with existing frontend.
 """
 
-import asyncio
-import json
 import os
 import queue
 import threading
-import uuid
 from functools import lru_cache
 from typing import Annotated, Dict, Callable, Optional, TYPE_CHECKING
 
