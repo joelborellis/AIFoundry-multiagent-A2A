@@ -820,56 +820,64 @@ Always respond in html format."""
 
     async def _handle_required_actions(self, run):
         """Handle function calls required by the Azure AI Agent."""
-        try:
-            if hasattr(run, "required_action") and run.required_action:
-                tool_calls = run.required_action.submit_tool_outputs.tool_calls
-                tool_outputs = []
+        with self.tracer.start_as_current_span("handle_required_actions") as span:
+            try:
+                if hasattr(run, "required_action") and run.required_action:
+                    tool_calls = run.required_action.submit_tool_outputs.tool_calls
+                    tool_outputs = []
+                    
+                    span.set_attribute("tool_calls.count", len(tool_calls))
 
-                for tool_call in tool_calls:
-                    function_name = tool_call.function.name
-                    function_args = json.loads(tool_call.function.arguments)
+                    for tool_call in tool_calls:
+                        function_name = tool_call.function.name
+                        function_args = json.loads(tool_call.function.arguments)
+                        
+                        span.set_attribute(f"tool_call.{tool_call.id}.function", function_name)
+                        span.set_attribute(f"tool_call.{tool_call.id}.args", str(function_args))
 
-                    print(
-                        f"Executing function: {function_name} with args: {function_args}"
-                    )
-
-                    if function_name == "send_message":
-                        try:
-                            # Call our send_message method
-                            result = await self.send_message(
-                                agent_name=function_args["agent_name"],
-                                task=function_args["task"],
-                            )
-                            # Convert result to JSON string
-                            output = json.dumps(
-                                result.model_dump()
-                                if hasattr(result, "model_dump")
-                                else str(result)
-                            )
-                        except Exception as e:
-                            output = json.dumps({"error": str(e)})
-                    else:
-                        output = json.dumps(
-                            {"error": f"Unknown function: {function_name}"}
+                        print(
+                            f"Executing function: {function_name} with args: {function_args}"
                         )
 
-                    tool_outputs.append(
-                        {"tool_call_id": tool_call.id, "output": output}
+                        if function_name == "send_message":
+                            try:
+                                # Call our send_message method
+                                result = await self.send_message(
+                                    agent_name=function_args["agent_name"],
+                                    task=function_args["task"],
+                                )
+                                # Convert result to JSON string
+                                output = json.dumps(
+                                    result.model_dump()
+                                    if hasattr(result, "model_dump")
+                                    else str(result)
+                                )
+                            except Exception as e:
+                                output = json.dumps({"error": str(e)})
+                        else:
+                            output = json.dumps(
+                                {"error": f"Unknown function: {function_name}"}
+                            )
+
+                        tool_outputs.append(
+                            {"tool_call_id": tool_call.id, "output": output}
+                        )
+
+                    # Submit the tool outputs
+                    self.agents_client.runs.submit_tool_outputs(
+                        thread_id=self.current_thread.id,
+                        run_id=run.id,
+                        tool_outputs=tool_outputs,
                     )
+                    print(f"Submitted {len(tool_outputs)} tool outputs")
 
-                # Submit the tool outputs
-                self.agents_client.runs.submit_tool_outputs(
-                    thread_id=self.current_thread.id,
-                    run_id=run.id,
-                    tool_outputs=tool_outputs,
-                )
-                print(f"Submitted {len(tool_outputs)} tool outputs")
-
-        except Exception as e:
-            print(f"Error handling required actions: {e}")
-            import traceback
-
-            traceback.print_exc()
+            except Exception as e:
+                span.set_attribute("success", False)
+                span.set_attribute("error.message", str(e))
+                span.record_exception(e)
+                print(f"Error handling required actions: {e}")
+                import traceback
+                traceback.print_exc()
 
     def cleanup(self):
         """Clean up Azure AI agent resources."""

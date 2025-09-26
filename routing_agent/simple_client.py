@@ -5,11 +5,8 @@ This client connects to the /chat/stream endpoint using urllib and displays
 real-time responses from the Azure AI routing agent.
 """
 
-import asyncio
 import json
-import sys
 import urllib.request
-import urllib.parse
 import urllib.error
 from typing import Optional
 
