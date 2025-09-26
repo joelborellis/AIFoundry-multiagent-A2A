@@ -450,11 +450,15 @@ Always respond in html format."""
                 raise ValueError(f"Client not available for {agent_name}")
 
             task_id = state["task_id"] if "task_id" in state else str(uuid.uuid4())
+            # Store the task_id back in state to ensure consistency across multiple calls
+            state["task_id"] = task_id
 
             if "context_id" in state:
                 context_id = state["context_id"]
             else:
                 context_id = str(uuid.uuid4())
+                # Store the context_id back in state to ensure consistency across multiple calls
+                state["context_id"] = context_id
 
             message_id = ""
             metadata = {}
@@ -485,16 +489,17 @@ Always respond in html format."""
             if context_id:
                 payload["message"]["contextId"] = context_id
 
-            with self.tracer.start_as_current_span("remote_agent_call") as call_span:
-                call_span.set_attribute("remote_agent.name", agent_name)
-                call_span.set_attribute("payload.message_id", message_id)
+            try:
+                with self.tracer.start_as_current_span("remote_agent_call") as call_span:
+                    call_span.set_attribute("remote_agent.name", agent_name)
+                    call_span.set_attribute("payload.message_id", message_id)
 
-                message_request = SendMessageRequest(
-                    id=message_id, params=MessageSendParams.model_validate(payload)
-                )
-                send_response: SendMessageResponse = await client.send_message(
-                    message_request=message_request
-                )
+                    message_request = SendMessageRequest(
+                        id=message_id, params=MessageSendParams.model_validate(payload)
+                    )
+                    send_response: SendMessageResponse = await client.send_message(
+                        message_request=message_request
+                    )
                 print(
                     "send_response",
                     send_response.model_dump_json(exclude_none=True, indent=2),
@@ -504,13 +509,25 @@ Always respond in html format."""
                     call_span.set_attribute("success", False)
                     call_span.set_attribute("error.type", "non_success_response")
                     print("received non-success response. Aborting get task ")
-                    return
+                    return {
+                        "status": "error",
+                        "agent_name": agent_name,
+                        "task_id": task_id,
+                        "error": "Received non-success response from remote agent",
+                        "response_type": type(send_response.root).__name__
+                    }
 
                 if not isinstance(send_response.root.result, Task):
                     call_span.set_attribute("success", False)
                     call_span.set_attribute("error.type", "non_task_response")
                     print("received non-task response. Aborting get task ")
-                    return
+                    return {
+                        "status": "error",
+                        "agent_name": agent_name,
+                        "task_id": task_id,
+                        "error": "Received non-task response from remote agent",
+                        "result_type": type(send_response.root.result).__name__
+                    }
 
                 # History as (role, text) pairs
                 agent_response = send_response.model_dump_json(
@@ -560,11 +577,40 @@ Always respond in html format."""
                 call_span.set_attribute("success", True)
                 span.set_attribute("success", True)
 
-            # Notify about agent execution completion via callback
-            if self.status_callback:
-                self.status_callback("agent_complete", agent_name)
+                # Notify about agent execution completion via callback
+                if self.status_callback:
+                    self.status_callback("agent_complete", agent_name)
 
-            return send_response.root.result
+                # Return a more comprehensive response for the function calling
+                response_data = {
+                    "status": "completed",
+                    "agent_name": agent_name,
+                    "task_id": task_id,
+                    "context_id": context_id,
+                    "result": last_agent_txt or artifact_text,
+                    "task_state": state
+                }
+                
+                return response_data
+                
+            except Exception as e:
+                span.set_attribute("error.type", "remote_agent_call_failed")
+                span.set_attribute("error.message", str(e))
+                span.record_exception(e)
+                print(f"Error calling remote agent {agent_name}: {e}")
+                
+                # Notify about agent execution failure via callback
+                if self.status_callback:
+                    self.status_callback("agent_error", agent_name)
+                
+                return {
+                    "status": "error",
+                    "agent_name": agent_name,
+                    "task_id": task_id,
+                    "context_id": context_id,
+                    "error": f"Failed to communicate with remote agent: {str(e)}",
+                    "error_type": type(e).__name__
+                }
 
     async def process_user_message(
         self, user_message: str, thread_id: Optional[str] = None
@@ -803,11 +849,12 @@ Always respond in html format."""
                                 task=function_args["task"],
                             )
                             # Convert result to JSON string
-                            output = json.dumps(
-                                result.model_dump()
-                                if hasattr(result, "model_dump")
-                                else str(result)
-                            )
+                            if isinstance(result, dict):
+                                output = json.dumps(result)
+                            elif hasattr(result, "model_dump"):
+                                output = json.dumps(result.model_dump())
+                            else:
+                                output = json.dumps({"result": str(result)})
                         except Exception as e:
                             output = json.dumps({"error": str(e)})
                     else:
