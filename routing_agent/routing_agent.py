@@ -322,6 +322,13 @@ class RoutingAgent:
                 span.set_attribute("thread.action", "created_new")
                 span.set_attribute("thread.id", thread.id)
                 print(f"Created new thread, thread ID: {thread.id}")
+                
+                # Clear context state when creating a new thread (new conversation)
+                self.context.state.pop("task_id", None)
+                self.context.state.pop("task_state", None)
+                self.context.state.pop("context_id", None)
+                print("Cleared context state for new thread")
+                
                 return thread
 
             except Exception as e:
@@ -344,8 +351,7 @@ class RoutingAgent:
             agents_info = self.agents
             routing_instructions = """
 - Delegate user inquiries to appropriate specialized remote agents
-- Connect users with sports_news_agent for sports news requests  
-- Connect users with sports_results_agent for sports results requests
+- Connect users with sports_results_agent for sports news and results requests
 - Use the send_message function to route requests to the appropriate agent"""
         else:
             agents_info = "No remote agents currently available"
@@ -449,16 +455,46 @@ Always respond in html format."""
                 span.set_attribute("error.type", "client_unavailable")
                 raise ValueError(f"Client not available for {agent_name}")
 
+<<<<<<< HEAD
             task_id = state["task_id"] if "task_id" in state else str(uuid.uuid4())
             # Store the task_id back in state to ensure consistency across multiple calls
             state["task_id"] = task_id
+=======
+            # Check if we have a previous task and its state
+            previous_task_id = state.get("task_id")
+            previous_task_state = state.get("task_state")
+            previous_context_id = state.get("context_id")
+>>>>>>> 141e55db27ca12e2027cc2d3d295890c7897c316
 
-            if "context_id" in state:
-                context_id = state["context_id"]
+            # Only reuse task/context IDs if the previous task is NOT in a terminal state
+            # Terminal states include: completed, failed, cancelled
+            terminal_states = {"completed", "failed", "cancelled", "error"}
+            
+            task_id = None
+            context_id = None
+            
+            if (previous_task_id and previous_task_state and 
+                previous_task_state not in terminal_states):
+                # Continue with existing task if it's still active
+                task_id = previous_task_id
+                context_id = previous_context_id
+                print(f"Continuing existing task: {task_id} (state: {previous_task_state})")
             else:
+<<<<<<< HEAD
                 context_id = str(uuid.uuid4())
                 # Store the context_id back in state to ensure consistency across multiple calls
                 state["context_id"] = context_id
+=======
+                # Start fresh - don't reuse completed/failed task IDs
+                if previous_task_state in terminal_states:
+                    print(f"Previous task {previous_task_id} is in terminal state '{previous_task_state}', starting new task")
+                else:
+                    print("Starting new task (no previous task found)")
+                # Clear the stored IDs to start fresh
+                state.pop("task_id", None)
+                state.pop("task_state", None) 
+                state.pop("context_id", None)
+>>>>>>> 141e55db27ca12e2027cc2d3d295890c7897c316
 
             message_id = ""
             metadata = {}
@@ -470,8 +506,10 @@ Always respond in html format."""
                 message_id = str(uuid.uuid4())
 
             span.set_attribute("message.id", message_id)
-            span.set_attribute("task.id", task_id)
-            span.set_attribute("context.id", context_id)
+            if task_id:
+                span.set_attribute("task.id", task_id)
+            if context_id:
+                span.set_attribute("context.id", context_id)
 
             payload = {
                 "message": {
@@ -483,9 +521,11 @@ Always respond in html format."""
                 },
             }
 
+            # Only include taskId if we have an existing task (continuing conversation)
             if task_id:
                 payload["message"]["taskId"] = task_id
 
+            # Only include contextId if we have an existing context (continuing conversation)
             if context_id:
                 payload["message"]["contextId"] = context_id
 
@@ -538,7 +578,7 @@ Always respond in html format."""
                 # Now you have typed dot-access:
                 task_id = env.result.id
                 state = env.result.status.state
-                context_id = env.result.contextId
+                context_id = env.result.contextId  # Use contextId not context_id
                 artifact_text = (
                     env.result.artifacts[0].parts[0].text
                 )  # "Task completed successfully."
@@ -572,6 +612,12 @@ Always respond in html format."""
                 }
 
                 print(f"captured: {captured}")
+
+                # Store the task_id, state, and context_id from the sports agent response for future use
+                context_state = self.context.state
+                context_state["task_id"] = task_id
+                context_state["task_state"] = state  # Store the task state to check if it's terminal
+                context_state["context_id"] = context_id
 
                 call_span.set_attribute("agent_response", captured)
                 call_span.set_attribute("success", True)
@@ -828,15 +874,22 @@ Always respond in html format."""
 
     async def _handle_required_actions(self, run):
         """Handle function calls required by the Azure AI Agent."""
-        try:
-            if hasattr(run, "required_action") and run.required_action:
-                tool_calls = run.required_action.submit_tool_outputs.tool_calls
-                tool_outputs = []
+        with self.tracer.start_as_current_span("handle_required_actions") as span:
+            try:
+                if hasattr(run, "required_action") and run.required_action:
+                    tool_calls = run.required_action.submit_tool_outputs.tool_calls
+                    tool_outputs = []
+                    
+                    span.set_attribute("tool_calls.count", len(tool_calls))
 
-                for tool_call in tool_calls:
-                    function_name = tool_call.function.name
-                    function_args = json.loads(tool_call.function.arguments)
+                    for tool_call in tool_calls:
+                        function_name = tool_call.function.name
+                        function_args = json.loads(tool_call.function.arguments)
+                        
+                        span.set_attribute(f"tool_call.{tool_call.id}.function", function_name)
+                        span.set_attribute(f"tool_call.{tool_call.id}.args", str(function_args))
 
+<<<<<<< HEAD
                     print(
                         f"Executing function: {function_name} with args: {function_args}"
                     )
@@ -860,25 +913,51 @@ Always respond in html format."""
                     else:
                         output = json.dumps(
                             {"error": f"Unknown function: {function_name}"}
+=======
+                        print(
+                            f"Executing function: {function_name} with args: {function_args}"
+>>>>>>> 141e55db27ca12e2027cc2d3d295890c7897c316
                         )
 
-                    tool_outputs.append(
-                        {"tool_call_id": tool_call.id, "output": output}
+                        if function_name == "send_message":
+                            try:
+                                # Call our send_message method
+                                result = await self.send_message(
+                                    agent_name=function_args["agent_name"],
+                                    task=function_args["task"],
+                                )
+                                # Convert result to JSON string
+                                output = json.dumps(
+                                    result.model_dump()
+                                    if hasattr(result, "model_dump")
+                                    else str(result)
+                                )
+                            except Exception as e:
+                                output = json.dumps({"error": str(e)})
+                        else:
+                            output = json.dumps(
+                                {"error": f"Unknown function: {function_name}"}
+                            )
+
+                        tool_outputs.append(
+                            {"tool_call_id": tool_call.id, "output": output}
+                        )
+
+                    # Submit the tool outputs
+                    self.agents_client.runs.submit_tool_outputs(
+                        thread_id=self.current_thread.id,
+                        run_id=run.id,
+                        tool_outputs=tool_outputs,
                     )
+                    print(f"Submitted {len(tool_outputs)} tool outputs")
 
-                # Submit the tool outputs
-                self.agents_client.runs.submit_tool_outputs(
-                    thread_id=self.current_thread.id,
-                    run_id=run.id,
-                    tool_outputs=tool_outputs,
-                )
-                print(f"Submitted {len(tool_outputs)} tool outputs")
-
-        except Exception as e:
-            print(f"Error handling required actions: {e}")
-            import traceback
-
-            traceback.print_exc()
+            except Exception as e:
+                span.set_attribute("success", False)
+                span.set_attribute("error.message", str(e))
+                span.record_exception(e)
+                print(f"Error handling required actions: {e}")
+                import traceback
+                traceback.print_exc()
 
     def cleanup(self):
         """Clean up Azure AI agent resources."""

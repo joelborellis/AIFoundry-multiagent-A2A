@@ -1,14 +1,10 @@
 & C:/Projects/AIFoundry-multiagent-A2A/routing_agent/.venv/Scripts/Activate.ps1
 
-& C:/Projects/AIFoundry-multiagent-A2A/remote_agents/sports_news_agent/.venv/Scripts/Activate.ps1
-
 & C:/Projects/AIFoundry-multiagent-A2A/remote_agents/sports_results_agent/.venv/Scripts/Activate.ps1
 
 cd routing_agent && python -m uvicorn __init__:app --host 0.0.0.0 --port 8083 --reload
 
 
 & D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\routing_agent\.venv\Scripts\Activate.ps1
-
-& D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\remote_agents/sports_news_agent/.venv/Scripts/Activate.ps1
 
 & D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\remote_agents/sports_results_agent/.venv/Scripts/Activate.ps1

@@ -88,13 +88,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Endpoint to reset the thread_id (current_thread) in the backend
-@app.post("/reset")
-async def reset_thread(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
-    if hasattr(routing_agent, 'current_thread'):
-        routing_agent.current_thread = None
-    return {"status": "reset", "thread_id": None}
-
 # Add CORS middleware for React frontend
 app.add_middleware(
     CORSMiddleware,
@@ -103,43 +96,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.get("/")
-async def root(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
-    """Root endpoint with API information - maintains exact same response format."""
-    if routing_agent and routing_agent.azure_agent:
-        agent_status = {
-            "azure_agent_id": routing_agent.azure_agent.id,
-            "thread_id": routing_agent.get_current_thread_id(),
-            "available_remote_agents": len(routing_agent.remote_agent_connections),
-            "remote_agents": list(routing_agent.remote_agent_connections.keys())
-        }
-    else:
-        agent_status = {
-            "azure_agent_id": None,
-            "thread_id": None,
-            "available_remote_agents": 0,
-            "remote_agents": []
-        }
-    
-    return {
-        "message": "Azure AI Routing Agent API",
-        "version": "1.0.0",
-        "status": "running",
-        "agent_status": agent_status
-    }
-
-
-@app.get("/health")
-async def health_check(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
-    """Health check endpoint - maintains exact same response format."""
-    is_healthy = routing_agent is not None
-    return {
-        "status": "healthy" if is_healthy else "unhealthy",
-        "agent_initialized": is_healthy
-    }
-
 
 async def generate_response_stream(
     message: str, 
@@ -216,6 +172,62 @@ async def generate_response_stream(
     
     # Send end of stream marker
     yield f"data: {json.dumps({'type': 'end'})}\n\n"
+
+# Endpoint to reset the thread_id (current_thread) in the backend
+@app.post("/reset")
+async def reset_thread(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
+    if hasattr(routing_agent, 'current_thread'):
+        routing_agent.current_thread = None
+    
+    # Clear context state on reset
+    if hasattr(routing_agent, 'context') and hasattr(routing_agent.context, 'state'):
+        routing_agent.context.state.pop("task_id", None)
+        routing_agent.context.state.pop("task_state", None)
+        routing_agent.context.state.pop("context_id", None)
+    
+    return {"status": "reset", "thread_id": None}
+
+
+##############################
+#
+# Begin endpoint definitions
+#
+#############################
+
+@app.get("/")
+async def root(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
+    """Root endpoint with API information - maintains exact same response format."""
+    if routing_agent and routing_agent.azure_agent:
+        agent_status = {
+            "azure_agent_id": routing_agent.azure_agent.id,
+            "thread_id": routing_agent.get_current_thread_id(),
+            "available_remote_agents": len(routing_agent.remote_agent_connections),
+            "remote_agents": list(routing_agent.remote_agent_connections.keys())
+        }
+    else:
+        agent_status = {
+            "azure_agent_id": None,
+            "thread_id": None,
+            "available_remote_agents": 0,
+            "remote_agents": []
+        }
+    
+    return {
+        "message": "Azure AI Routing Agent API",
+        "version": "1.0.0",
+        "status": "running",
+        "agent_status": agent_status
+    }
+
+
+@app.get("/health")
+async def health_check(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
+    """Health check endpoint - maintains exact same response format."""
+    is_healthy = routing_agent is not None
+    return {
+        "status": "healthy" if is_healthy else "unhealthy",
+        "agent_initialized": is_healthy
+    }
 
 
 @app.post("/chat/stream")

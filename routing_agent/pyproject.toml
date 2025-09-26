@@ -13,7 +13,7 @@ dependencies = [
     "semantic-kernel>=1.36.1",
     "httpx>=0.25.0",
     "python-dotenv>=1.0.0",
-    "a2a-sdk==0.2.9",
+    "a2a-sdk==0.3.7",
     "azure-ai-projects>=1.0.0",
     "azure-monitor-opentelemetry>=1.7.0",
     "opentelemetry-sdk>=1.36.0",
