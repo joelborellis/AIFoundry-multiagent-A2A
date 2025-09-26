@@ -23,7 +23,6 @@ load_dotenv()
 @click.option('--port', default=10001)
 def main(host, port):
     """Starts the OpenAI Agents server using A2A."""
-    httpx_client = httpx.AsyncClient()
     request_handler = DefaultRequestHandler(
         agent_executor=OpenAIWebSearchAgentExecutor(),
         task_store=InMemoryTaskStore(),
@@ -58,12 +57,13 @@ def get_agent_card(host: str, port: int):
     agent_card = AgentCard(
         name='SportsResultsAgent',
         description=(
-            'This agent provides sports results for various sports leagues such as MLB, NBA, NASCAR, and Golf. '
+            'This agent provides sports results for various sports leagues such as MLB, NBA, NASCAR, and GOLF. '
         ),
         url='http://localhost:10001/',
         version='1.0.0',
         defaultInputModes=['text'],
         defaultOutputModes=['text'],
+        preferred_transport="HTTP+JSON",
         capabilities=capabilities,
         skills=[skill_mcp_tools],
     )

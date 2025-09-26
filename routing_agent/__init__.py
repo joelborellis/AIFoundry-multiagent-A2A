@@ -93,6 +93,13 @@ app = FastAPI(
 async def reset_thread(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
     if hasattr(routing_agent, 'current_thread'):
         routing_agent.current_thread = None
+    
+    # Clear context state on reset
+    if hasattr(routing_agent, 'context') and hasattr(routing_agent.context, 'state'):
+        routing_agent.context.state.pop("task_id", None)
+        routing_agent.context.state.pop("task_state", None)
+        routing_agent.context.state.pop("context_id", None)
+    
     return {"status": "reset", "thread_id": None}
 
 # Add CORS middleware for React frontend

@@ -27,8 +27,9 @@ class RemoteAgentConnections:
         #print(f'agent_card: {agent_card}')
         #print(f'agent_url: {agent_url}')
         self._httpx_client = httpx.AsyncClient(timeout=30)
+        # A2A server uses "/" as the default RPC endpoint, not "/message:send"
         self.agent_client = A2AClient(
-            self._httpx_client, agent_card, url=f'{agent_url}/message:send'
+            self._httpx_client, agent_card, url=f'{agent_url}/'
         )
         self.card = agent_card
 

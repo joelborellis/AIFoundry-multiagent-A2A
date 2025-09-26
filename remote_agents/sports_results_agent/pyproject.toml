@@ -7,6 +7,6 @@ requires-python = ">=3.13"
 dependencies = [
     "python-dotenv>=1.0.0",
     "click>=8.2.1",
-    "a2a-sdk==0.2.9",
+    "a2a-sdk==0.3.7",
     "openai-agents>=0.1.0",
 ]
