@@ -28,7 +28,6 @@ class RemoteAgentConnections:
         #print(f'agent_card: {agent_card}')
         #print(f'agent_url: {agent_url}')
         self._httpx_client = httpx.AsyncClient(timeout=30)
-<<<<<<< HEAD
         
         # Construct the correct endpoint URL based on the agent card
         # If the agent card URL already includes /rpc/v1, use it; otherwise add it
@@ -42,11 +41,6 @@ class RemoteAgentConnections:
         print(f'Using endpoint URL: {endpoint_url}')
         self.agent_client = A2AClient(
             self._httpx_client, agent_card, url=endpoint_url
-=======
-        # A2A server uses "/" as the default RPC endpoint, not "/message:send"
-        self.agent_client = A2AClient(
-            self._httpx_client, agent_card, url=f'{agent_url}/'
->>>>>>> 141e55db27ca12e2027cc2d3d295890c7897c316
         )
         
         # Store fallback URL in case the primary endpoint fails
