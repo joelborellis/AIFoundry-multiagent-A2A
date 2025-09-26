@@ -35,18 +35,15 @@ os.environ["AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED"] = "true"
 
 load_dotenv()
 
-
 class Part(BaseModel):
     kind: Literal["text"]
     text: str
-
 
 class Artifact(BaseModel):
     artifactId: str
     description: Optional[str] = None
     name: Optional[str] = None
     parts: List[Part] = []
-
 
 class Message(BaseModel):
     contextId: str
@@ -56,10 +53,8 @@ class Message(BaseModel):
     role: str
     taskId: str
 
-
 class Status(BaseModel):
     state: str
-
 
 class Result(BaseModel):
     artifacts: List[Artifact] = []
@@ -69,19 +64,16 @@ class Result(BaseModel):
     kind: str
     status: Status
 
-
 class Envelope(BaseModel):
     id: str
     jsonrpc: str
     result: Result
-
 
 class AzureAgentContext:
     """Context class."""
 
     def __init__(self):
         self.state: Dict[str, Any] = {}
-
 
 class RoutingAgent:
     """The Routing agent.
@@ -322,13 +314,13 @@ class RoutingAgent:
                 span.set_attribute("thread.action", "created_new")
                 span.set_attribute("thread.id", thread.id)
                 print(f"Created new thread, thread ID: {thread.id}")
-                
+               
                 # Clear context state when creating a new thread (new conversation)
                 self.context.state.pop("task_id", None)
                 self.context.state.pop("task_state", None)
                 self.context.state.pop("context_id", None)
                 print("Cleared context state for new thread")
-                
+               
                 return thread
 
             except Exception as e:
@@ -455,36 +447,25 @@ Always respond in html format."""
                 span.set_attribute("error.type", "client_unavailable")
                 raise ValueError(f"Client not available for {agent_name}")
 
-<<<<<<< HEAD
-            task_id = state["task_id"] if "task_id" in state else str(uuid.uuid4())
-            # Store the task_id back in state to ensure consistency across multiple calls
-            state["task_id"] = task_id
-=======
             # Check if we have a previous task and its state
             previous_task_id = state.get("task_id")
             previous_task_state = state.get("task_state")
             previous_context_id = state.get("context_id")
->>>>>>> 141e55db27ca12e2027cc2d3d295890c7897c316
 
             # Only reuse task/context IDs if the previous task is NOT in a terminal state
             # Terminal states include: completed, failed, cancelled
             terminal_states = {"completed", "failed", "cancelled", "error"}
-            
+           
             task_id = None
             context_id = None
-            
-            if (previous_task_id and previous_task_state and 
+           
+            if (previous_task_id and previous_task_state and
                 previous_task_state not in terminal_states):
                 # Continue with existing task if it's still active
                 task_id = previous_task_id
                 context_id = previous_context_id
                 print(f"Continuing existing task: {task_id} (state: {previous_task_state})")
             else:
-<<<<<<< HEAD
-                context_id = str(uuid.uuid4())
-                # Store the context_id back in state to ensure consistency across multiple calls
-                state["context_id"] = context_id
-=======
                 # Start fresh - don't reuse completed/failed task IDs
                 if previous_task_state in terminal_states:
                     print(f"Previous task {previous_task_id} is in terminal state '{previous_task_state}', starting new task")
@@ -492,9 +473,8 @@ Always respond in html format."""
                     print("Starting new task (no previous task found)")
                 # Clear the stored IDs to start fresh
                 state.pop("task_id", None)
-                state.pop("task_state", None) 
+                state.pop("task_state", None)
                 state.pop("context_id", None)
->>>>>>> 141e55db27ca12e2027cc2d3d295890c7897c316
 
             message_id = ""
             metadata = {}
@@ -529,17 +509,16 @@ Always respond in html format."""
             if context_id:
                 payload["message"]["contextId"] = context_id
 
-            try:
-                with self.tracer.start_as_current_span("remote_agent_call") as call_span:
-                    call_span.set_attribute("remote_agent.name", agent_name)
-                    call_span.set_attribute("payload.message_id", message_id)
+            with self.tracer.start_as_current_span("remote_agent_call") as call_span:
+                call_span.set_attribute("remote_agent.name", agent_name)
+                call_span.set_attribute("payload.message_id", message_id)
 
-                    message_request = SendMessageRequest(
-                        id=message_id, params=MessageSendParams.model_validate(payload)
-                    )
-                    send_response: SendMessageResponse = await client.send_message(
-                        message_request=message_request
-                    )
+                message_request = SendMessageRequest(
+                    id=message_id, params=MessageSendParams.model_validate(payload)
+                )
+                send_response: SendMessageResponse = await client.send_message(
+                    message_request=message_request
+                )
                 print(
                     "send_response",
                     send_response.model_dump_json(exclude_none=True, indent=2),
@@ -549,25 +528,13 @@ Always respond in html format."""
                     call_span.set_attribute("success", False)
                     call_span.set_attribute("error.type", "non_success_response")
                     print("received non-success response. Aborting get task ")
-                    return {
-                        "status": "error",
-                        "agent_name": agent_name,
-                        "task_id": task_id,
-                        "error": "Received non-success response from remote agent",
-                        "response_type": type(send_response.root).__name__
-                    }
+                    return
 
                 if not isinstance(send_response.root.result, Task):
                     call_span.set_attribute("success", False)
                     call_span.set_attribute("error.type", "non_task_response")
                     print("received non-task response. Aborting get task ")
-                    return {
-                        "status": "error",
-                        "agent_name": agent_name,
-                        "task_id": task_id,
-                        "error": "Received non-task response from remote agent",
-                        "result_type": type(send_response.root.result).__name__
-                    }
+                    return
 
                 # History as (role, text) pairs
                 agent_response = send_response.model_dump_json(
@@ -623,40 +590,11 @@ Always respond in html format."""
                 call_span.set_attribute("success", True)
                 span.set_attribute("success", True)
 
-                # Notify about agent execution completion via callback
-                if self.status_callback:
-                    self.status_callback("agent_complete", agent_name)
+            # Notify about agent execution completion via callback
+            if self.status_callback:
+                self.status_callback("agent_complete", agent_name)
 
-                # Return a more comprehensive response for the function calling
-                response_data = {
-                    "status": "completed",
-                    "agent_name": agent_name,
-                    "task_id": task_id,
-                    "context_id": context_id,
-                    "result": last_agent_txt or artifact_text,
-                    "task_state": state
-                }
-                
-                return response_data
-                
-            except Exception as e:
-                span.set_attribute("error.type", "remote_agent_call_failed")
-                span.set_attribute("error.message", str(e))
-                span.record_exception(e)
-                print(f"Error calling remote agent {agent_name}: {e}")
-                
-                # Notify about agent execution failure via callback
-                if self.status_callback:
-                    self.status_callback("agent_error", agent_name)
-                
-                return {
-                    "status": "error",
-                    "agent_name": agent_name,
-                    "task_id": task_id,
-                    "context_id": context_id,
-                    "error": f"Failed to communicate with remote agent: {str(e)}",
-                    "error_type": type(e).__name__
-                }
+            return send_response.root.result
 
     async def process_user_message(
         self, user_message: str, thread_id: Optional[str] = None
@@ -879,44 +817,18 @@ Always respond in html format."""
                 if hasattr(run, "required_action") and run.required_action:
                     tool_calls = run.required_action.submit_tool_outputs.tool_calls
                     tool_outputs = []
-                    
+                   
                     span.set_attribute("tool_calls.count", len(tool_calls))
 
                     for tool_call in tool_calls:
                         function_name = tool_call.function.name
                         function_args = json.loads(tool_call.function.arguments)
-                        
+                       
                         span.set_attribute(f"tool_call.{tool_call.id}.function", function_name)
                         span.set_attribute(f"tool_call.{tool_call.id}.args", str(function_args))
 
-<<<<<<< HEAD
-                    print(
-                        f"Executing function: {function_name} with args: {function_args}"
-                    )
-
-                    if function_name == "send_message":
-                        try:
-                            # Call our send_message method
-                            result = await self.send_message(
-                                agent_name=function_args["agent_name"],
-                                task=function_args["task"],
-                            )
-                            # Convert result to JSON string
-                            if isinstance(result, dict):
-                                output = json.dumps(result)
-                            elif hasattr(result, "model_dump"):
-                                output = json.dumps(result.model_dump())
-                            else:
-                                output = json.dumps({"result": str(result)})
-                        except Exception as e:
-                            output = json.dumps({"error": str(e)})
-                    else:
-                        output = json.dumps(
-                            {"error": f"Unknown function: {function_name}"}
-=======
                         print(
                             f"Executing function: {function_name} with args: {function_args}"
->>>>>>> 141e55db27ca12e2027cc2d3d295890c7897c316
                         )
 
                         if function_name == "send_message":
