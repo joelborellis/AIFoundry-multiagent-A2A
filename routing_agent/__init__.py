@@ -196,7 +196,11 @@ async def reset_thread(routing_agent: Annotated[RoutingAgent, Depends(get_routin
 
 @app.get("/")
 async def root(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)]):
-    """Root endpoint with API information - maintains exact same response format."""
+    """Root endpoint with health check and system status information."""
+    # Health check logic
+    is_healthy = routing_agent is not None
+    health_status = "healthy" if is_healthy else "unhealthy"
+    
     if routing_agent and routing_agent.azure_agent:
         agent_status = {
             "azure_agent_id": routing_agent.azure_agent.id,
@@ -214,8 +218,9 @@ async def root(routing_agent: Annotated[RoutingAgent, Depends(get_routing_agent)
     
     return {
         "message": "Azure AI Routing Agent API",
-        "version": "1.0.0",
-        "status": "running",
+        "health_status": health_status,
+        "agent_initialized": is_healthy,
+        "system_status": "running",
         "agent_status": agent_status
     }
 

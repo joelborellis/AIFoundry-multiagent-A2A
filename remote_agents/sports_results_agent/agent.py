@@ -1,55 +1,49 @@
 import logging
 from collections.abc import AsyncIterable
-from typing import Any
+from typing import Any, Optional
 
-from agents import Agent, Runner, WebSearchTool
+from agents import Agent, Runner, WebSearchTool  # OpenAI Agents SDK
+from openai.types.responses import ResponseTextDeltaEvent  # <- raw delta type
 
-from dotenv import load_dotenv
-from pydantic import BaseModel
-
+# Reduce httpx logging verbosity to avoid tracing noise
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-load_dotenv()
-
-
 class OpenAIWebSearchAgent:
     """Wraps OpenAI Agent with WebSearchTool to handle various tasks."""
 
-    def __init__(self):
-        self.agent = None
+    def __init__(self, flush_every: int = 200):
+        self.agent: Optional[Agent] = None
+        self.flush_every = flush_every  # stream chunk size for UX
 
     async def initialize(self):
-        """Initialize the OpenAI agent with WebSearchTool()."""
-        try:
-
-            self.agent = Agent(
-                name="Sports Results Agent",
-                instructions="You are a helpful agent that searches the web for sports results.",
-                tools=[WebSearchTool()],
-            )
-
-            logger.info("OpenAI Agent initialized successfully")
-
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenAI Agent: {e}")
-            await self.cleanup()
-            raise
+        self.agent = Agent(
+            name="Sports Results Agent",
+            instructions=(
+                "You are a helpful agent that searches the web for sports results. "
+                "Give concise scores, winner, and a few notable facts. "
+                "When you cite, include the source name in parentheses, e.g. (ESPN), (Reuters)."
+            ),
+            tools=[WebSearchTool()],
+        )
+        logger.info("OpenAI Agent initialized successfully")
 
     async def stream(
         self,
         user_input: str,
-        session_id: str = None,
+        session_id: str | None = None,
     ) -> AsyncIterable[dict[str, Any]]:
-        """Stream responses from the OpenAI Agent.
-
-        Args:
-            user_input (str): User input message.
-            session_id (str): Unique identifier for the session (optional).
-
-        Yields:
-            dict: A dictionary containing the content and task completion status.
+        """
+        Yields dicts your A2A executor understands:
+          - content: str
+          - is_task_complete: bool
+          - require_user_input: bool
+        Optionally:
+          - event: "token" | "tool_start" | "tool_result" | "tool_error" | "agent_updated"
+          - tool_name: str
+          - meta: dict
         """
         if not self.agent:
             yield {
@@ -59,48 +53,103 @@ class OpenAIWebSearchAgent:
             }
             return
 
+        result = Runner.run_streamed(self.agent, input=user_input)
+
+        buffer: list[str] = []
+        since_flush = 0
+
         try:
-            # Use the stream_events() method to get async iterable events
-            stream_result = Runner.run_streamed(
-                self.agent,
-                user_input,
-            )
+            async for event in result.stream_events():
+                etype = getattr(event, "type", None)
 
-            async for event in stream_result.stream_events():
-                # Look for ResponseTextDeltaEvent in raw_response_event
-                if (
-                    hasattr(event, "type")
-                    and event.type == "raw_response_event"
-                    and hasattr(event, "data")
-                ):
-
-                    data = event.data
-                    data_type = type(data).__name__
-
-                    # Extract text delta from ResponseTextDeltaEvent
-                    if data_type == "ResponseTextDeltaEvent" and hasattr(data, "delta"):
-                        delta_text = data.delta
-                        if delta_text:  # Only yield if there's actual content
+                # 1) RAW LLM DELTAS (Responses API format)
+                #    event.type == "raw_response_event" and data is ResponseTextDeltaEvent
+                if etype == "raw_response_event" and isinstance(getattr(event, "data", None), ResponseTextDeltaEvent):
+                    delta = event.data.delta or ""
+                    if delta:
+                        buffer.append(delta)
+                        since_flush += len(delta)
+                        # Optional streaming chunks for better UX
+                        if since_flush >= self.flush_every:
+                            chunk = "".join(buffer)
+                            buffer.clear()
+                            since_flush = 0
                             yield {
                                 "is_task_complete": False,
                                 "require_user_input": False,
-                                "content": delta_text,
+                                "event": "token",
+                                "content": chunk,
                             }
+                    continue
 
-            # Final completion message
+                # 2) HIGHER-LEVEL RUN ITEMS
+                #    event.type == "run_item_stream_event"
+                if etype == "run_item_stream_event":
+                    item = getattr(event, "item", None)
+                    itype = getattr(item, "type", None)
+                    # tool call started
+                    if itype == "tool_call_item":
+                        yield {
+                            "is_task_complete": False,
+                            "require_user_input": False,
+                            "event": "tool_start",
+                            "tool_name": getattr(item, "tool_name", "unknown_tool"),
+                            "content": f"Using tool: {getattr(item, 'tool_name', 'unknown_tool')}…",
+                            "meta": {
+                                "input": getattr(item, "input", None),
+                            },
+                        }
+                    # tool output arrived
+                    elif itype == "tool_call_output_item":
+                        # Some SDK versions expose 'output' (structured) and/or 'text'
+                        output = getattr(item, "output", None)
+                        text = getattr(item, "text", None)
+                        yield {
+                            "is_task_complete": False,
+                            "require_user_input": False,
+                            "event": "tool_result",
+                            "tool_name": getattr(item, "tool_name", "unknown_tool"),
+                            "content": text or "Tool returned results.",
+                            "meta": {"output": output},
+                        }
+                    # final model message (one chunk at item granularity)
+                    elif itype == "message_output_item":
+                        # If you want, you could flush here as well, but we rely on deltas buffer.
+                        pass
+                    continue
+
+                # 3) AGENT HANDOFF/UPDATE
+                if etype == "agent_updated_stream_event":
+                    new_agent = getattr(event, "new_agent", None)
+                    if new_agent:
+                        yield {
+                            "is_task_complete": False,
+                            "require_user_input": False,
+                            "event": "agent_updated",
+                            "content": f"Handoff to agent: {getattr(new_agent, 'name', 'unknown')}",
+                        }
+                    continue
+
+                # 4) TOOL ERRORS (if surfaced as dedicated events in your SDK version)
+                if etype == "tool_error":
+                    yield {
+                        "is_task_complete": False,
+                        "require_user_input": False,
+                        "event": "tool_error",
+                        "tool_name": getattr(event, "tool_name", "unknown_tool"),
+                        "content": f"Tool error: {getattr(event, 'error', 'unknown error')}",
+                    }
+                    continue
+
+            # End of stream → flush any remaining buffered text as the final answer
+            final_text = "".join(buffer).strip()
             yield {
                 "is_task_complete": True,
                 "require_user_input": False,
-                "content": "Task completed successfully.",
+                "content": final_text if final_text else "Done.",
             }
+
         except Exception as e:
-            yield {
-                "is_task_complete": False,
-                "require_user_input": True,
-                "content": f"Error processing request: {str(e)}",
-            }
-
-    async def cleanup(self):
-        """Cleanup resources."""
-
-        self.agent = None
+            # Let your executor catch this and mark the task failed
+            logger.exception("Streaming failed")
+            raise

@@ -21,8 +21,9 @@ interface AgentStatus {
 
 interface ApiStatus {
   message: string
-  version: string
-  status: string
+  health_status: string
+  agent_initialized: boolean
+  system_status: string
   agent_status: AgentStatus
 }
 
@@ -383,12 +384,13 @@ function App() {
               </div>
             )}
             {apiStatus && (
-              <div className="status-grid">
-                <div className="status-item">
+              <div className="status-grid">                <div className="status-item">
                   <Server className="item-icon" />
                   <div>
-                    <div className="item-label">API Version</div>
-                    <div className="item-value">{apiStatus.version}</div>
+                    <div className="item-label">Health Status</div>
+                    <div className={`item-value ${apiStatus.health_status === 'healthy' ? 'status-healthy' : 'status-unhealthy'}`}>
+                      {apiStatus.health_status === 'healthy' ? '✅ Healthy' : '❌ Unhealthy'}
+                    </div>
                   </div>
                 </div>
                 <div className="status-item">

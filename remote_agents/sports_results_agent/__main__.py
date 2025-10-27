@@ -35,39 +35,34 @@ def main(host, port):
     uvicorn.run(server.build(), host=host, port=port)
 
 
-def get_agent_card(host: str, port: int):
-    """Returns the Agent Card for the OpenAI WebSearchTool Agent."""
+# ...imports unchanged...
 
-    # Build the agent card
+def get_agent_card(host: str, port: int):
     capabilities = AgentCapabilities(streaming=True)
-    skill_mcp_tools = AgentSkill(
+    skill_sports = AgentSkill(
         id='sports_results_agent',
         name='Sports Results Agent',
-        description=(
-            'Provides sports results from various sports leagues.  Include scores, who won, and other relevant information.'
-        ),
-        tags=['mlb', 'nba', 'nascar', 'golf','college football'],
+        description='Provides sports results (scores, winner, notable stats) across MLB, NBA, NASCAR, golf, college football.',
+        tags=['mlb', 'nba', 'nascar', 'golf', 'college football'],
         examples=[
             'Show score for Pirates game last night',
-            'What was the final score of the game 7 NBA finals and who won?',
-            'Who won the 2025 US Golf Open Championship and where was it played?',
+            'What was the final score of Game 7 NBA Finals and who won?',
+            'Who won the 2025 U.S. Open (golf) and where was it played?',
         ],
     )
 
     agent_card = AgentCard(
         name='SportsResultsAgent',
-        description=(
-            'This agent provides sports results for various sports leagues such as MLB, NBA, NASCAR, and GOLF. '
-        ),
-        url='http://localhost:10001/',
+        description='Returns sports results across major leagues.',
+        url=f'http://{host}:{port}/',                # JSON-RPC POST target
         version='1.0.0',
-        defaultInputModes=['text'],
-        defaultOutputModes=['text'],
-        preferred_transport="HTTP+JSON",
+        default_input_modes=['text'],                # snake_case fields
+        default_output_modes=['text'],
+        preferred_transport='HTTP+JSONRPC',          # align with JSON-RPC
         capabilities=capabilities,
-        skills=[skill_mcp_tools],
+        skills=[skill_sports],
+        # supports_authenticated_extended_card=True, # optional
     )
-
     return agent_card
 
 
