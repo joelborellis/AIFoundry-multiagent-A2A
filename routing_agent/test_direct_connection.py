@@ -54,7 +54,7 @@ async def test_direct_connection():
             # Test the send_message method
             result = await routing_agent.send_message(
                 "SportsResultsAgent", 
-                "Who won the NFL game last night?"
+                "Who won the Steelers game last night?"
             )
             
             print(f"✅ Successfully got response!")
