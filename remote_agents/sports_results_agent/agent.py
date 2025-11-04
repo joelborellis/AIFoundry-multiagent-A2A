@@ -1,6 +1,11 @@
 import logging
+import os
 from collections.abc import AsyncIterable
 from typing import Any, Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from agents import Agent, Runner, WebSearchTool  # OpenAI Agents SDK
 from openai.types.responses import ResponseTextDeltaEvent  # <- raw delta type
@@ -19,6 +24,14 @@ class OpenAIWebSearchAgent:
         self.flush_every = flush_every  # stream chunk size for UX
 
     async def initialize(self):
+        # Verify API key is loaded
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY not found in environment variables")
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        
+        logger.info(f"OPENAI_API_KEY loaded (length: {len(api_key)})")
+        
         self.agent = Agent(
             name="Sports Results Agent",
             instructions=(

@@ -1,4 +1,9 @@
 import logging
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events.event_queue import EventQueue
 from a2a.types import (

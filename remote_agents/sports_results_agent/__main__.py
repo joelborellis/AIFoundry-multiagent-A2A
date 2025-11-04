@@ -1,43 +1,59 @@
-import logging
-import uvicorn
-
 import click
-import httpx
-
-from a2a.server.apps import A2AStarletteApplication
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCapabilities, AgentCard, AgentSkill
-from agent_executor import OpenAIWebSearchAgentExecutor
+import uvicorn
 from dotenv import load_dotenv
 
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
+# Load environment variables from .env file
 load_dotenv()
+
+from a2a.server.agent_execution import AgentExecutor
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.request_handlers.default_request_handler import (
+    DefaultRequestHandler,
+)
+from a2a.server.tasks.inmemory_task_store import InMemoryTaskStore
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    GetTaskRequest,
+    GetTaskResponse,
+    SendMessageRequest,
+    SendMessageResponse,
+)
+
+from agent_executor import OpenAIWebSearchAgentExecutor
+
+
+class A2ARequestHandler(DefaultRequestHandler):
+    """A2A Request Handler for the A2A Repo Agent."""
+
+    def __init__(
+        self, agent_executor: AgentExecutor, task_store: InMemoryTaskStore
+    ):
+        super().__init__(agent_executor, task_store)
+
+    async def on_get_task(self, request: GetTaskRequest) -> GetTaskResponse:
+        return await super().on_get_task(request)
+
+    async def on_message_send(
+        self, request: SendMessageRequest
+    ) -> SendMessageResponse:
+        return await super().on_message_send(request)
 
 
 @click.command()
-@click.option('--host', default='localhost')
-@click.option('--port', default=10001)
-def main(host, port):
-    """Starts the OpenAI Agents server using A2A."""
-    request_handler = DefaultRequestHandler(
-        agent_executor=OpenAIWebSearchAgentExecutor(),
-        task_store=InMemoryTaskStore(),
-    )
+@click.option('--host', 'host', default='localhost')
+@click.option('--port', 'port', default=10001)
+def main(host: str, port: int):
+    """Start the A2A Repo Agent server.
 
-    server = A2AStarletteApplication(
-        agent_card=get_agent_card(host, port), http_handler=request_handler
-    )
+    This function initializes the A2A Repo Agent server with the specified host and port.
+    It creates an agent card with the agent's name, description, version, and capabilities.
 
-    uvicorn.run(server.build(), host=host, port=port)
-
-
-# ...imports unchanged...
-
-def get_agent_card(host: str, port: int):
+    Args:
+        host (str): The host address to run the server on.
+        port (int): The port number to run the server on.
+    """
     capabilities = AgentCapabilities(streaming=True)
     skill_sports = AgentSkill(
         id='sports_results_agent',
@@ -58,12 +74,22 @@ def get_agent_card(host: str, port: int):
         version='1.0.0',
         default_input_modes=['text'],                # snake_case fields
         default_output_modes=['text'],
-        preferred_transport='HTTP+JSONRPC',          # align with JSON-RPC
+        #preferred_transport='HTTP+JSONRPC',          # align with JSON-RPC
         capabilities=capabilities,
         skills=[skill_sports],
         # supports_authenticated_extended_card=True, # optional
     )
-    return agent_card
+
+    task_store = InMemoryTaskStore()
+    request_handler = A2ARequestHandler(
+        agent_executor=OpenAIWebSearchAgentExecutor(),
+        task_store=task_store,
+    )
+
+    server = A2AStarletteApplication(
+        agent_card=agent_card, http_handler=request_handler
+    )
+    uvicorn.run(server.build(), host=host, port=port)
 
 
 if __name__ == '__main__':
