@@ -32,13 +32,15 @@ class A2ARequestHandler(DefaultRequestHandler):
     ):
         super().__init__(agent_executor, task_store)
 
-    async def on_get_task(self, request: GetTaskRequest) -> GetTaskResponse:
-        return await super().on_get_task(request)
+    async def on_get_task(self, request: GetTaskRequest, *args, **kwargs) -> GetTaskResponse:
+        # Accept and forward any additional parameters the base class may pass
+        return await super().on_get_task(request, *args, **kwargs)
 
     async def on_message_send(
-        self, request: SendMessageRequest
+        self, request: SendMessageRequest, *args, **kwargs
     ) -> SendMessageResponse:
-        return await super().on_message_send(request)
+        # Accept and forward any additional parameters the base class may pass
+        return await super().on_message_send(request, *args, **kwargs)
 
 
 @click.command()
@@ -77,7 +79,7 @@ def main(host: str, port: int):
         #preferred_transport='HTTP+JSONRPC',          # align with JSON-RPC
         capabilities=capabilities,
         skills=[skill_sports],
-        # supports_authenticated_extended_card=True, # optional
+        #supports_authenticated_extended_card=True, # optional
     )
 
     task_store = InMemoryTaskStore()
