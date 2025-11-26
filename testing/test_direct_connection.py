@@ -5,9 +5,15 @@ This bypasses the Azure AI agents authentication and tests just the connection f
 
 import asyncio
 import httpx
+import sys
+import os
+
+# Add the parent directory to Python path so we can import routing_agent
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from a2a.client import A2ACardResolver
-from remote_agent_connection import RemoteAgentConnections
-from routing_agent import RoutingAgent
+from routing_agent.remote_agent_connection import RemoteAgentConnections
+from routing_agent.routing_agent import RoutingAgent
 
 
 async def test_direct_connection():

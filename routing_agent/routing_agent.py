@@ -26,7 +26,7 @@ from azure.ai.agents import AgentsClient
 from azure.identity import DefaultAzureCredential
 from azure.ai.agents.models import ListSortOrder
 from dotenv import load_dotenv
-from tracing import get_tracing_manager, trace_operation
+from tracing import get_tracing_manager
 
 # Enable Azure tracing with content recording
 os.environ["AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED"] = "true"

@@ -1,0 +1,19 @@
+kind: Prompt
+name: MicrosoftLearnAgent
+description: Microsoft Learn Agent
+instructions: You answer questions by searching the Microsoft Learn content only.
+model:
+    id: =Env.AZURE_AI_MODEL_DEPLOYMENT_NAME
+    connection:
+        kind: remote
+        endpoint: =Env.AZURE_AI_PROJECT_ENDPOINT
+tools:
+  - kind: mcp
+    name: microsoft_learn
+    description: Get information from Microsoft Learn.
+    url: https://learn.microsoft.com/api/mcp
+    approvalMode:
+      kind: never
+    allowedTools:
+      - microsoft_docs_search
+      - microsoft_code_sample_search

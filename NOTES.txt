@@ -1,8 +1,20 @@
-& C:/Projects/AIFoundry-multiagent-A2A/routing_agent/.venv/Scripts/Activate.ps1
+# Corrected activation commands (note lowercase 'activate.ps1'):
+cd "D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\routing_agent"
+.\.venv\Scripts\activate.ps1
 
-& C:/Projects/AIFoundry-multiagent-A2A/remote_agents/sports_results_agent/.venv/Scripts/Activate.ps1
+cd "D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\remote_agents\sports_results_agent"
+.\.venv\Scripts\activate.ps1
 
-cd routing_agent && python -m uvicorn __init__:app --host 0.0.0.0 --port 8083 --reload
+cd "D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\testing"
+.\.venv\Scripts\activate.ps1
+
+# Start routing agent:
+cd "D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\routing_agent"
+.\.venv\Scripts\activate.ps1
+uvicorn __init__:app --host 0.0.0.0 --port 8083 --reload
+
+cd remote_agents/sports_results_agent
+uv run python __main__.py
 
 
 & D:\Projects\AIFoundry\AIFoundry-multiagent-A2A\routing_agent\.venv\Scripts\Activate.ps1

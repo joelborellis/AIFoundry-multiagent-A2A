@@ -3,6 +3,9 @@ routing_agent/__pycache__/
 routing_agent/.venv
 routing_agent/.env
 
+testing/.venv
+testing/.env
+
 remote_agents/sports_news_agent/__pycache__
 remote_agents/sports_news_agent/.venv
 remote_agents/sports_news_agent/.env

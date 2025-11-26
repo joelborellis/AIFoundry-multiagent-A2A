@@ -7,14 +7,11 @@ import os
 import queue
 import threading
 from functools import lru_cache
-from typing import Annotated, Dict, Callable, Optional, TYPE_CHECKING
+from typing import Annotated, Dict, Optional
 
 from fastapi import Depends
+from routing_agent import RoutingAgent
 
-if TYPE_CHECKING:
-    from routing_agent import RoutingAgent
-else:
-    from routing_agent import RoutingAgent
 
 
 class StatusQueueManager:

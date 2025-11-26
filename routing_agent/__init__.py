@@ -1,4 +1,3 @@
-
 """
 FastAPI application for multi-agent routing with Azure AI Agents integration.
 

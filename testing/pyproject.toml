@@ -1,0 +1,22 @@
+[project]
+name = "testing"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies =  [
+    "azure-ai-agents>=1.2.0b5",
+    "agent-framework>=1.0.0b251028",
+    "agent-framework-azure-ai>=1.0.0b251120",
+    "azure-ai-projects>=2.0.0b2",
+    "azure-monitor-opentelemetry>=1.7.0",
+    "opentelemetry-sdk>=1.36.0",
+    "httpx>=0.25.0",
+    "python-dotenv>=1.0.0",
+    "a2a-sdk==0.3.10",
+    "pydantic>=2.11.7",
+    "agent-framework-declarative>=1.0.0b251120",
+]
+
+[tool.uv]
+prerelease = "allow"
