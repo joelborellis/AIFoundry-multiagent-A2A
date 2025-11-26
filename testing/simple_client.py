@@ -107,7 +107,6 @@ def interactive_mode():
     agent_info = client.get_agent_info()
     if agent_info:
         print(f"\n📊 Agent Info:")
-        print(f"   Status: {agent_info.get('status', 'unknown')}")
         agent_status = agent_info.get('agent_status', {})
         print(f"   Azure Agent ID: {agent_status.get('azure_agent_id', 'N/A')}")
         print(f"   Available Remote Agents: {agent_status.get('available_remote_agents', 0)}")
